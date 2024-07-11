@@ -28,7 +28,7 @@ jobs:
       env:
         GCP_PROJECT: ${{ secrets.GCP_PROJECT }}
         GCP_SA_KEY: ${{ secrets.GCP_SA_KEY }}
-    - uses: google-github-actions/setup-gcloud@master
+    - uses: google-github-actions/setup-gcloud@v2.1.0
       with:
         project_id: ${{ secrets.GCP_PROJECT }}
         service_account_key: ${{ secrets.GCP_SA_KEY }}
