@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/api-moose/company-earnings/internal/config"
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
 	"github.com/api-moose/company-earnings/internal/utils/logging"
 )
 
@@ -21,6 +22,11 @@ func versionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		err := httperrors.NewHTTPError(http.StatusNotFound, "Not Found")
+		http.Error(w, err.Error(), err.StatusCode)
+		return
+	}
 	fmt.Fprintf(w, "Welcome to the Financial Data Platform API")
 }
 

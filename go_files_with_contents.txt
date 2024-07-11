@@ -1,0 +1,709 @@
+File: ./tests/api_test.go
+\n
+File: ./cmd/app/main_test.go
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/api-moose/company-earnings/internal/config"
+)
+
+func TestMainHandler(t *testing.T) {
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(mainHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	expected := "Welcome to the Financial Data Platform API"
+	if rr.Body.String() != expected {
+		t.Errorf("handler returned unexpected body: got %v want %v",
+			rr.Body.String(), expected)
+	}
+}
+
+func TestHealthCheckHandler(t *testing.T) {
+	req, err := http.NewRequest("GET", "/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(healthCheckHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	expected := `{"status":"healthy"}`
+	if strings.TrimSpace(rr.Body.String()) != expected {
+		t.Errorf("handler returned unexpected body: got %v want %v",
+			rr.Body.String(), expected)
+	}
+}
+
+func TestVersionHandler(t *testing.T) {
+	req, err := http.NewRequest("GET", "/version", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(versionHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	var response map[string]string
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, exists := response["version"]; !exists {
+		t.Errorf("response does not contain version key")
+	}
+}
+
+func TestSetupRouter(t *testing.T) {
+	router := setupRouter()
+
+	testCases := []struct {
+		name           string
+		path           string
+		expectedStatus int
+		expectedBody   string
+	}{
+		{"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
+		{"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
+		{"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tc.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v",
+					status, tc.expectedStatus)
+			}
+
+			if strings.TrimSpace(rr.Body.String()) != strings.TrimSpace(tc.expectedBody) {
+				t.Errorf("handler returned unexpected body: got %v want %v",
+					rr.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestLoggingMiddleware(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(log.Writer())
+
+	router := setupRouter()
+
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	logOutput := buf.String()
+	expectedEntries := []string{
+		"GET",
+		"/",
+		"200",
+	}
+
+	for _, entry := range expectedEntries {
+		if !strings.Contains(logOutput, entry) {
+			t.Errorf("Log output missing expected entry: %s", entry)
+		}
+	}
+}
+
+func TestPocketBaseIntegration(t *testing.T) {
+	// Create a temporary directory for PocketBase data
+	tempDir, err := os.MkdirTemp("", "pocketbase-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Set the data directory for PocketBase
+	os.Setenv("POCKETBASE_DATA_DIR", tempDir)
+
+	// Initialize PocketBase configuration
+	pbConfig := config.NewPocketBaseConfig()
+
+	// Test PocketBase connection
+	if pbConfig.App == nil {
+		t.Error("PocketBase app is nil")
+	}
+
+	// Start and immediately stop PocketBase
+	go func() {
+		if err := pbConfig.Start(); err != nil {
+			t.Errorf("Failed to start PocketBase: %v", err)
+		}
+	}()
+
+	// Wait a short time for PocketBase to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Reset PocketBase state
+	pbConfig.App.ResetBootstrapState()
+}
+
+func TestMain(m *testing.M) {
+	// Setup code here (if needed)
+
+	// Run the tests
+	exitCode := m.Run()
+
+	// Teardown code here (if needed)
+
+	os.Exit(exitCode)
+}
+\n
+File: ./cmd/app/main.go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/api-moose/company-earnings/internal/config"
+	"github.com/api-moose/company-earnings/internal/utils/logging"
+)
+
+const version = "0.1.0"
+
+func versionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": version})
+}
+
+func mainHandler(w http.ResponseWriter, r *http.Request) {
+	fmt.Fprintf(w, "Welcome to the Financial Data Platform API")
+}
+
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+}
+
+func setupRouter() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", mainHandler)
+	mux.HandleFunc("/health", healthCheckHandler)
+	mux.HandleFunc("/version", versionHandler)
+
+	return logging.LoggingMiddleware(mux)
+}
+
+func main() {
+	// Initialize PocketBase
+	pbConfig := config.NewPocketBaseConfig()
+
+	// Start PocketBase in a goroutine
+	go func() {
+		if err := pbConfig.Start(); err != nil {
+			log.Fatalf("Failed to start PocketBase: %v", err)
+		}
+	}()
+
+	router := setupRouter()
+
+	// Create a server
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: router,
+	}
+
+	// Start the server in a goroutine
+	go func() {
+		log.Println("Starting server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Set up graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// Wait for interrupt signal
+	<-stop
+
+	log.Println("Shutting down server...")
+
+	// Shutdown the server
+	if err := server.Shutdown(nil); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
+	}
+
+	pbConfig.App.ResetBootstrapState()
+
+	log.Println("Server and PocketBase stopped gracefully")
+}
+\n
+File: ./internal/db/seed/seed.go
+\n
+File: ./internal/db/repository.go
+\n
+File: ./internal/db/pocketbase/pocketbase.go
+\n
+File: ./internal/config/config.go
+package config
+
+import (
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
+)
+
+type PocketBaseConfig struct {
+	App *pocketbase.PocketBase
+}
+
+func NewPocketBaseConfig() *PocketBaseConfig {
+	dataDir := filepath.Join(".", "pb_data")
+	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
+
+	app := pocketbase.New()
+
+	// Customize your PocketBase configuration here
+	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
+		// add your custom routes or other configurations
+		return nil
+	})
+
+	return &PocketBaseConfig{
+		App: app,
+	}
+}
+
+func (c *PocketBaseConfig) Start() error {
+	if err := c.App.Start(); err != nil {
+		return err
+	}
+	return nil
+}
+\n
+File: ./internal/config/config_test.go
+package config
+
+import (
+	"testing"
+)
+
+func TestNewPocketBaseConfig(t *testing.T) {
+	config := NewPocketBaseConfig()
+	if config == nil {
+		t.Fatal("Expected non-nil PocketBaseConfig")
+	}
+	if config.App == nil {
+		t.Fatal("Expected non-nil PocketBase app")
+	}
+}
+\n
+File: ./internal/handlers/user/user_test.go
+\n
+File: ./internal/handlers/user/user.go
+\n
+File: ./internal/handlers/stock/stock.go
+\n
+File: ./internal/handlers/stock/stock_test.go
+\n
+File: ./internal/services/user/user_test.go
+\n
+File: ./internal/services/user/user.go
+\n
+File: ./internal/services/stock/stock.go
+\n
+File: ./internal/services/stock/stock_test.go
+\n
+File: ./internal/utils/utils_test.go
+package main
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestAppError(t *testing.T) {
+	err := NewAppError(http.StatusNotFound, "Resource not found")
+	if err == nil {
+		t.Error("Expected error, got nil")
+	}
+	if err.Error() != "Error 404: Resource not found" {
+		t.Errorf("Unexpected error message: got %q", err.Error())
+	}
+}
+\n
+File: ./internal/utils/helpers/helpers.go
+\n
+File: ./internal/utils/response/response.go
+package response
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
+)
+
+func JSONResponse(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func ErrorResponse(w http.ResponseWriter, err error) {
+	httpErr, ok := err.(*httperrors.HTTPError)
+	if !ok {
+		httpErr = httperrors.NewHTTPError(http.StatusInternalServerError, "Internal Server Error")
+	}
+
+	JSONResponse(w, httpErr.StatusCode, map[string]string{"error": httpErr.Message})
+}
+\n
+File: ./internal/utils/response/response_test.go
+package response
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
+)
+
+func TestJSONResponse(t *testing.T) {
+	w := httptest.NewRecorder()
+	data := map[string]string{"message": "success"}
+
+	JSONResponse(w, http.StatusOK, data)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Error unmarshaling response: %v", err)
+	}
+
+	if response["message"] != "success" {
+		t.Errorf("Expected message 'success', got '%s'", response["message"])
+	}
+}
+
+func TestErrorResponse(t *testing.T) {
+	w := httptest.NewRecorder()
+	err := httperrors.NewHTTPError(http.StatusBadRequest, "invalid input")
+
+	ErrorResponse(w, err)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	var response map[string]string
+	jsonErr := json.Unmarshal(w.Body.Bytes(), &response)
+	if jsonErr != nil {
+		t.Fatalf("Error unmarshaling response: %v", jsonErr)
+	}
+
+	if response["error"] != "invalid input" {
+		t.Errorf("Expected error 'invalid input', got '%s'", response["error"])
+	}
+}
+\n
+File: ./internal/utils/logging/logging.go
+package logging
+
+import (
+	"log"
+	"net/http"
+	"time"
+)
+
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Wrap the response writer to capture the status code
+		wrappedWriter := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		// Call the next handler
+		next.ServeHTTP(wrappedWriter, r)
+
+		// Log the request details
+		log.Printf(
+			"%s %s %s %d %v",
+			r.RemoteAddr,
+			r.Method,
+			r.URL.Path,
+			wrappedWriter.statusCode,
+			time.Since(start),
+		)
+	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+\n
+File: ./internal/utils/logging/logging_test.go
+package logging
+
+import (
+	"bytes"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestLoggingMiddleware(t *testing.T) {
+	// Create a buffer to capture log output
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Wrap the test handler with the logging middleware
+	handler := LoggingMiddleware(testHandler)
+
+	// Create a test request
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+
+	// Create a response recorder
+	rr := httptest.NewRecorder()
+
+	// Serve the request using the wrapped handler
+	handler.ServeHTTP(rr, req)
+
+	// Check if the status code is still correct
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	// Check if the log output contains expected information
+	logOutput := buf.String()
+	expectedEntries := []string{
+		"127.0.0.1:12345",
+		"GET",
+		"/test",
+		"200",
+	}
+
+	for _, entry := range expectedEntries {
+		if !strings.Contains(logOutput, entry) {
+			t.Errorf("Log output missing expected entry: %s", entry)
+		}
+	}
+}
+\n
+File: ./internal/utils/utils.go
+package main
+
+import "fmt"
+
+// AppError represents an application-level error.
+type AppError struct {
+    StatusCode int
+    Message    string
+}
+
+func (e *AppError) Error() string {
+    return fmt.Sprintf("Error %d: %s", e.StatusCode, e.Message)
+}
+
+// NewAppError creates a new AppError instance.
+func NewAppError(statusCode int, message string) *AppError {
+    return &AppError{
+        StatusCode: statusCode,
+        Message:    message,
+    }
+}\n
+File: ./internal/middleware/auth/jwt.go
+\n
+File: ./internal/middleware/auth/auth.go
+\n
+File: ./internal/errors/dberrors/dberrors.go
+package dberrors
+
+import "fmt"
+
+type DBError struct {
+	Message string
+}
+
+func (e *DBError) Error() string {
+	return fmt.Sprintf("DB Error: %s", e.Message)
+}
+
+func NewDBError(message string) *DBError {
+	return &DBError{
+		Message: message,
+	}
+}
+
+func IsDBError(err error) bool {
+	_, ok := err.(*DBError)
+	return ok
+}
+\n
+File: ./internal/errors/dberrors/dberrors_test.go
+package dberrors
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestNewDBError(t *testing.T) {
+	err := NewDBError("connection failed")
+	if err.Error() != "DB Error: connection failed" {
+		t.Errorf("Expected 'DB Error: connection failed', got '%s'", err.Error())
+	}
+}
+
+func TestIsDBError(t *testing.T) {
+	err := NewDBError("query failed")
+	if !IsDBError(err) {
+		t.Error("Expected IsDBError to return true")
+	}
+
+	regularErr := errors.New("regular error")
+	if IsDBError(regularErr) {
+		t.Error("Expected IsDBError to return false for regular error")
+	}
+}
+\n
+File: ./internal/errors/httperrors/httperrors_test.go
+package httperrors
+
+import (
+	"errors"
+	"net/http"
+	"testing"
+)
+
+func TestNewHTTPError(t *testing.T) {
+	err := NewHTTPError(http.StatusNotFound, "resource not found")
+	if err.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status code %d, got %d", http.StatusNotFound, err.StatusCode)
+	}
+	if err.Message != "resource not found" {
+		t.Errorf("Expected message 'resource not found', got '%s'", err.Message)
+	}
+}
+
+func TestHTTPError_Error(t *testing.T) {
+	err := NewHTTPError(http.StatusBadRequest, "invalid input")
+	if err.Error() != "HTTP 400: invalid input" {
+		t.Errorf("Expected 'HTTP 400: invalid input', got '%s'", err.Error())
+	}
+}
+
+func TestIsHTTPError(t *testing.T) {
+	err := NewHTTPError(http.StatusUnauthorized, "unauthorized access")
+	if !IsHTTPError(err) {
+		t.Error("Expected IsHTTPError to return true")
+	}
+
+	regularErr := errors.New("regular error")
+	if IsHTTPError(regularErr) {
+		t.Error("Expected IsHTTPError to return false for regular error")
+	}
+}
+\n
+File: ./internal/errors/httperrors/httperrors.go
+package httperrors
+
+import (
+	"fmt"
+)
+
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+func NewHTTPError(statusCode int, message string) *HTTPError {
+	return &HTTPError{
+		StatusCode: statusCode,
+		Message:    message,
+	}
+}
+
+func IsHTTPError(err error) bool {
+	_, ok := err.(*HTTPError)
+	return ok
+}\n

@@ -86,20 +86,42 @@ func TestVersionHandler(t *testing.T) {
 		t.Errorf("response does not contain version key")
 	}
 }
+func TestMainHandlerWithError(t *testing.T) {
+    req, err := http.NewRequest("GET", "/nonexistent", nil)
+    if err != nil {
+        t.Fatal(err)
+    }
 
+    rr := httptest.NewRecorder()
+    handler := http.HandlerFunc(mainHandler)
+
+    handler.ServeHTTP(rr, req)
+
+    if status := rr.Code; status != http.StatusNotFound {
+        t.Errorf("handler returned wrong status code: got %v want %v",
+            status, http.StatusNotFound)
+    }
+
+    expected := "HTTP 404: Not Found\n"
+    if rr.Body.String() != expected {
+        t.Errorf("handler returned unexpected body: got %q want %q",
+            rr.Body.String(), expected)
+    }
+}
 func TestSetupRouter(t *testing.T) {
-	router := setupRouter()
+    router := setupRouter()
 
-	testCases := []struct {
-		name           string
-		path           string
-		expectedStatus int
-		expectedBody   string
-	}{
-		{"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
-		{"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
-		{"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
-	}
+    testCases := []struct {
+        name           string
+        path           string
+        expectedStatus int
+        expectedBody   string
+    }{
+        {"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
+        {"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
+        {"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
+        {"Nonexistent route", "/nonexistent", http.StatusNotFound, "HTTP 404: Not Found\n"},
+    }
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
