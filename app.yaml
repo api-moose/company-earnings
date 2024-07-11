@@ -1,0 +1,7 @@
+runtime: go122  # Specify the Go runtime, adjust to your Go version
+env: standard
+instance_class: F1  # Choose an instance class based on your needs
+
+handlers:
+- url: /.*
+  script: auto
