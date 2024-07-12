@@ -5,10 +5,15 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/models"
 )
 
-func AuthMiddleware(app core.App) func(http.Handler) http.Handler {
+type AuthApp interface {
+	FindAuthRecordByToken(token, secret string) (*models.Record, error)
+	GetAuthTokenSecret() string
+}
+
+func AuthMiddleware(app AuthApp) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			authHeader := r.Header.Get("Authorization")
@@ -24,10 +29,7 @@ func AuthMiddleware(app core.App) func(http.Handler) http.Handler {
 			}
 
 			token := parts[1]
-			record, err := app.Dao().FindAuthRecordByToken(
-				token,
-				app.Settings().RecordAuthToken.Secret,
-			)
+			record, err := app.FindAuthRecordByToken(token, app.GetAuthTokenSecret())
 			if err != nil || record == nil {
 				http.Error(w, "Invalid token", http.StatusUnauthorized)
 				return

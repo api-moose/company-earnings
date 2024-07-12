@@ -1,3 +1,4 @@
+// access_control.go
 package access_control
 
 import (
@@ -22,7 +23,19 @@ func RBACMiddleware(next http.Handler) http.Handler {
 		}
 
 		role, _ := user.Get("role").(string)
-		if !isAuthorized(role, r.URL.Path, tenantID) {
+		userTenantID, _ := user.Get("tenantId").(string)
+
+		if role == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		if userTenantID != tenantID {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		if !isAuthorized(role, r.URL.Path) {
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
@@ -31,9 +44,7 @@ func RBACMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-func isAuthorized(role, path, tenantID string) bool {
-	// This is a simple authorization logic. In a real-world scenario,
-	// you might want to use a more sophisticated system, possibly involving a database lookup.
+func isAuthorized(role, path string) bool {
 	switch role {
 	case "admin":
 		return true // Admins have access to all routes

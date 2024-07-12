@@ -29,7 +29,7 @@ func TestTenantMiddleware(t *testing.T) {
 
 			rr := httptest.NewRecorder()
 			handler := TenantMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				tenantID, ok := r.Context().Value(tenantContextKey).(string)
+				tenantID, ok := r.Context().Value(TenantContextKey).(string)
 				if !ok {
 					http.Error(w, "Tenant context not found", http.StatusInternalServerError)
 					return

@@ -1,3 +1,4 @@
+// access_control_test.go
 package access_control
 
 import (
@@ -16,15 +17,16 @@ func TestRBACMiddleware(t *testing.T) {
 		role           string
 		path           string
 		tenantID       string
+		userTenantID   string
 		expectedStatus int
 	}{
-		{"Admin access to admin route", "admin", "/admin", "tenant1", http.StatusOK},
-		{"Admin access to user route", "admin", "/user", "tenant1", http.StatusOK},
-		{"User access to user route", "user", "/user", "tenant1", http.StatusOK},
-		{"User access to admin route", "user", "/admin", "tenant1", http.StatusForbidden},
-		{"No role", "", "/user", "tenant1", http.StatusUnauthorized},
-		{"Invalid role", "invalid", "/user", "tenant1", http.StatusForbidden},
-		{"Cross-tenant access attempt", "admin", "/admin", "tenant2", http.StatusForbidden},
+		{"Admin access to admin route", "admin", "/admin", "tenant1", "tenant1", http.StatusOK},
+		{"Admin access to user route", "admin", "/user", "tenant1", "tenant1", http.StatusOK},
+		{"User access to user route", "user", "/user", "tenant1", "tenant1", http.StatusOK},
+		{"User access to admin route", "user", "/admin", "tenant1", "tenant1", http.StatusForbidden},
+		{"No role", "", "/user", "tenant1", "tenant1", http.StatusUnauthorized},
+		{"Invalid role", "invalid", "/user", "tenant1", "tenant1", http.StatusForbidden},
+		{"Cross-tenant access attempt", "admin", "/admin", "tenant1", "tenant2", http.StatusForbidden},
 	}
 
 	for _, tt := range tests {
@@ -36,9 +38,10 @@ func TestRBACMiddleware(t *testing.T) {
 
 			// Set up the context with tenant and user information
 			ctx := req.Context()
-			ctx = context.WithValue(ctx, tenancy.tenantContextKey, tt.tenantID)
+			ctx = context.WithValue(ctx, tenancy.TenantContextKey, tt.tenantID)
 			user := models.NewRecord(&models.Collection{})
 			user.Set("role", tt.role)
+			user.Set("tenantId", tt.userTenantID)
 			ctx = context.WithValue(ctx, "user", user)
 			req = req.WithContext(ctx)
 
