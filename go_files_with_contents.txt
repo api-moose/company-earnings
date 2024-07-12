@@ -89,20 +89,42 @@ func TestVersionHandler(t *testing.T) {
 		t.Errorf("response does not contain version key")
 	}
 }
+func TestMainHandlerWithError(t *testing.T) {
+    req, err := http.NewRequest("GET", "/nonexistent", nil)
+    if err != nil {
+        t.Fatal(err)
+    }
 
+    rr := httptest.NewRecorder()
+    handler := http.HandlerFunc(mainHandler)
+
+    handler.ServeHTTP(rr, req)
+
+    if status := rr.Code; status != http.StatusNotFound {
+        t.Errorf("handler returned wrong status code: got %v want %v",
+            status, http.StatusNotFound)
+    }
+
+    expected := "HTTP 404: Not Found\n"
+    if rr.Body.String() != expected {
+        t.Errorf("handler returned unexpected body: got %q want %q",
+            rr.Body.String(), expected)
+    }
+}
 func TestSetupRouter(t *testing.T) {
-	router := setupRouter()
+    router := setupRouter()
 
-	testCases := []struct {
-		name           string
-		path           string
-		expectedStatus int
-		expectedBody   string
-	}{
-		{"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
-		{"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
-		{"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
-	}
+    testCases := []struct {
+        name           string
+        path           string
+        expectedStatus int
+        expectedBody   string
+    }{
+        {"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
+        {"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
+        {"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
+        {"Nonexistent route", "/nonexistent", http.StatusNotFound, "HTTP 404: Not Found\n"},
+    }
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -213,6 +235,7 @@ import (
 	"syscall"
 
 	"github.com/api-moose/company-earnings/internal/config"
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
 	"github.com/api-moose/company-earnings/internal/utils/logging"
 )
 
@@ -224,6 +247,11 @@ func versionHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		err := httperrors.NewHTTPError(http.StatusNotFound, "Not Found")
+		http.Error(w, err.Error(), err.StatusCode)
+		return
+	}
 	fmt.Fprintf(w, "Welcome to the Financial Data Platform API")
 }
 
@@ -590,6 +618,1302 @@ func NewAppError(statusCode int, message string) *AppError {
 File: ./internal/middleware/auth/jwt.go
 \n
 File: ./internal/middleware/auth/auth.go
+\n
+File: ./internal/errors/dberrors/dberrors.go
+package dberrors
+
+import "fmt"
+
+type DBError struct {
+	Message string
+}
+
+func (e *DBError) Error() string {
+	return fmt.Sprintf("DB Error: %s", e.Message)
+}
+
+func NewDBError(message string) *DBError {
+	return &DBError{
+		Message: message,
+	}
+}
+
+func IsDBError(err error) bool {
+	_, ok := err.(*DBError)
+	return ok
+}
+\n
+File: ./internal/errors/dberrors/dberrors_test.go
+package dberrors
+
+import (
+	"errors"
+	"testing"
+)
+
+func TestNewDBError(t *testing.T) {
+	err := NewDBError("connection failed")
+	if err.Error() != "DB Error: connection failed" {
+		t.Errorf("Expected 'DB Error: connection failed', got '%s'", err.Error())
+	}
+}
+
+func TestIsDBError(t *testing.T) {
+	err := NewDBError("query failed")
+	if !IsDBError(err) {
+		t.Error("Expected IsDBError to return true")
+	}
+
+	regularErr := errors.New("regular error")
+	if IsDBError(regularErr) {
+		t.Error("Expected IsDBError to return false for regular error")
+	}
+}
+\n
+File: ./internal/errors/httperrors/httperrors_test.go
+package httperrors
+
+import (
+	"errors"
+	"net/http"
+	"testing"
+)
+
+func TestNewHTTPError(t *testing.T) {
+	err := NewHTTPError(http.StatusNotFound, "resource not found")
+	if err.StatusCode != http.StatusNotFound {
+		t.Errorf("Expected status code %d, got %d", http.StatusNotFound, err.StatusCode)
+	}
+	if err.Message != "resource not found" {
+		t.Errorf("Expected message 'resource not found', got '%s'", err.Message)
+	}
+}
+
+func TestHTTPError_Error(t *testing.T) {
+	err := NewHTTPError(http.StatusBadRequest, "invalid input")
+	if err.Error() != "HTTP 400: invalid input" {
+		t.Errorf("Expected 'HTTP 400: invalid input', got '%s'", err.Error())
+	}
+}
+
+func TestIsHTTPError(t *testing.T) {
+	err := NewHTTPError(http.StatusUnauthorized, "unauthorized access")
+	if !IsHTTPError(err) {
+		t.Error("Expected IsHTTPError to return true")
+	}
+
+	regularErr := errors.New("regular error")
+	if IsHTTPError(regularErr) {
+		t.Error("Expected IsHTTPError to return false for regular error")
+	}
+}
+\n
+File: ./internal/errors/httperrors/httperrors.go
+package httperrors
+
+import (
+	"fmt"
+)
+
+type HTTPError struct {
+	StatusCode int
+	Message    string
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.StatusCode, e.Message)
+}
+
+func NewHTTPError(statusCode int, message string) *HTTPError {
+	return &HTTPError{
+		StatusCode: statusCode,
+		Message:    message,
+	}
+}
+
+func IsHTTPError(err error) bool {
+	_, ok := err.(*HTTPError)
+	return ok
+}\n
+File: ./tests/api_test.go
+\n
+File: ./tests/middleware_integration_test.go
+package tests
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/api-moose/company-earnings/internal/middleware"
+	"github.com/pocketbase/pocketbase/daos"
+	"github.com/pocketbase/pocketbase/models"
+)
+
+// MockApp implements a minimal version of core.App for testing
+type MockApp struct {
+	UserData *models.User
+}
+
+func (m *MockApp) Dao() *daos.Dao {
+	return &daos.Dao{} // This is a stub. Implement methods as needed for testing.
+}
+
+func (m *MockApp) FindUserById(id string) (*models.User, error) {
+	if m.UserData != nil && m.UserData.Id == id {
+		return m.UserData, nil
+	}
+	return nil, errors.New("user not found")
+}
+
+func TestAuthAndRBACMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		token          string
+		role           string
+		path           string
+		tenantID       string
+		expectedStatus int
+	}{
+		{"Valid admin access", "valid_token", "admin", "/admin", "tenant1", http.StatusOK},
+		{"Valid user access", "valid_token", "user", "/user", "tenant1", http.StatusOK},
+		{"User accessing admin route", "valid_token", "user", "/admin", "tenant1", http.StatusForbidden},
+		{"Missing token", "", "user", "/user", "tenant1", http.StatusUnauthorized},
+		{"Invalid token", "invalid_token", "user", "/user", "tenant1", http.StatusUnauthorized},
+		{"Cross-tenant access attempt", "valid_token", "admin", "/admin", "tenant2", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mockApp := &MockApp{
+				UserData: &models.User{
+					Id:    "user1",
+					Email: "user1@example.com",
+				},
+			}
+			mockApp.UserData.SetDataValue("role", tt.role)
+
+			req, err := http.NewRequest("GET", tt.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tt.token != "" {
+				req.Header.Set("Authorization", tt.token)
+			}
+
+			// Set tenant ID in context
+			ctx := context.WithValue(req.Context(), middleware.TenantContextKey, tt.tenantID)
+			req = req.WithContext(ctx)
+
+			rr := httptest.NewRecorder()
+
+			// Chain the middlewares
+			handler := middleware.AuthMiddleware(mockApp)(middleware.RBACMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})))
+
+			handler.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tt.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v",
+					status, tt.expectedStatus)
+			}
+		})
+	}
+}
+\n
+File: ./cmd/app/main_test.go
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/api-moose/company-earnings/internal/config"
+)
+
+func TestMainHandler(t *testing.T) {
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(mainHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	expected := "Welcome to the Financial Data Platform API"
+	if rr.Body.String() != expected {
+		t.Errorf("handler returned unexpected body: got %v want %v",
+			rr.Body.String(), expected)
+	}
+}
+
+func TestHealthCheckHandler(t *testing.T) {
+	req, err := http.NewRequest("GET", "/health", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(healthCheckHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	expected := `{"status":"healthy"}`
+	if strings.TrimSpace(rr.Body.String()) != expected {
+		t.Errorf("handler returned unexpected body: got %v want %v",
+			rr.Body.String(), expected)
+	}
+}
+
+func TestVersionHandler(t *testing.T) {
+	req, err := http.NewRequest("GET", "/version", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	handler := http.HandlerFunc(versionHandler)
+
+	handler.ServeHTTP(rr, req)
+
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	var response map[string]string
+	err = json.Unmarshal(rr.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, exists := response["version"]; !exists {
+		t.Errorf("response does not contain version key")
+	}
+}
+func TestMainHandlerWithError(t *testing.T) {
+    req, err := http.NewRequest("GET", "/nonexistent", nil)
+    if err != nil {
+        t.Fatal(err)
+    }
+
+    rr := httptest.NewRecorder()
+    handler := http.HandlerFunc(mainHandler)
+
+    handler.ServeHTTP(rr, req)
+
+    if status := rr.Code; status != http.StatusNotFound {
+        t.Errorf("handler returned wrong status code: got %v want %v",
+            status, http.StatusNotFound)
+    }
+
+    expected := "HTTP 404: Not Found\n"
+    if rr.Body.String() != expected {
+        t.Errorf("handler returned unexpected body: got %q want %q",
+            rr.Body.String(), expected)
+    }
+}
+func TestSetupRouter(t *testing.T) {
+    router := setupRouter()
+
+    testCases := []struct {
+        name           string
+        path           string
+        expectedStatus int
+        expectedBody   string
+    }{
+        {"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
+        {"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
+        {"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
+        {"Nonexistent route", "/nonexistent", http.StatusNotFound, "HTTP 404: Not Found\n"},
+    }
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", tc.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			rr := httptest.NewRecorder()
+			router.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tc.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v",
+					status, tc.expectedStatus)
+			}
+
+			if strings.TrimSpace(rr.Body.String()) != strings.TrimSpace(tc.expectedBody) {
+				t.Errorf("handler returned unexpected body: got %v want %v",
+					rr.Body.String(), tc.expectedBody)
+			}
+		})
+	}
+}
+
+func TestLoggingMiddleware(t *testing.T) {
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+	defer log.SetOutput(log.Writer())
+
+	router := setupRouter()
+
+	req, err := http.NewRequest("GET", "/", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	router.ServeHTTP(rr, req)
+
+	logOutput := buf.String()
+	expectedEntries := []string{
+		"GET",
+		"/",
+		"200",
+	}
+
+	for _, entry := range expectedEntries {
+		if !strings.Contains(logOutput, entry) {
+			t.Errorf("Log output missing expected entry: %s", entry)
+		}
+	}
+}
+
+func TestPocketBaseIntegration(t *testing.T) {
+	// Create a temporary directory for PocketBase data
+	tempDir, err := os.MkdirTemp("", "pocketbase-test")
+	if err != nil {
+		t.Fatalf("Failed to create temp directory: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	// Set the data directory for PocketBase
+	os.Setenv("POCKETBASE_DATA_DIR", tempDir)
+
+	// Initialize PocketBase configuration
+	pbConfig := config.NewPocketBaseConfig()
+
+	// Test PocketBase connection
+	if pbConfig.App == nil {
+		t.Error("PocketBase app is nil")
+	}
+
+	// Start and immediately stop PocketBase
+	go func() {
+		if err := pbConfig.Start(); err != nil {
+			t.Errorf("Failed to start PocketBase: %v", err)
+		}
+	}()
+
+	// Wait a short time for PocketBase to start
+	time.Sleep(100 * time.Millisecond)
+
+	// Reset PocketBase state
+	pbConfig.App.ResetBootstrapState()
+}
+
+func TestMain(m *testing.M) {
+	// Setup code here (if needed)
+
+	// Run the tests
+	exitCode := m.Run()
+
+	// Teardown code here (if needed)
+
+	os.Exit(exitCode)
+}
+\n
+File: ./cmd/app/main.go
+package main
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"github.com/api-moose/company-earnings/internal/config"
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
+	"github.com/api-moose/company-earnings/internal/utils/logging"
+)
+
+const version = "0.1.0"
+
+func versionHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"version": version})
+}
+
+func mainHandler(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path != "/" {
+		err := httperrors.NewHTTPError(http.StatusNotFound, "Not Found")
+		http.Error(w, err.Error(), err.StatusCode)
+		return
+	}
+	fmt.Fprintf(w, "Welcome to the Financial Data Platform API")
+}
+
+func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+}
+
+func setupRouter() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", mainHandler)
+	mux.HandleFunc("/health", healthCheckHandler)
+	mux.HandleFunc("/version", versionHandler)
+
+	return logging.LoggingMiddleware(mux)
+}
+
+func main() {
+	// Initialize PocketBase
+	pbConfig := config.NewPocketBaseConfig()
+
+	// Start PocketBase in a goroutine
+	go func() {
+		if err := pbConfig.Start(); err != nil {
+			log.Fatalf("Failed to start PocketBase: %v", err)
+		}
+	}()
+
+	router := setupRouter()
+
+	// Create a server
+	server := &http.Server{
+		Addr:    ":8080",
+		Handler: router,
+	}
+
+	// Start the server in a goroutine
+	go func() {
+		log.Println("Starting server on :8080")
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v", err)
+		}
+	}()
+
+	// Set up graceful shutdown
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+
+	// Wait for interrupt signal
+	<-stop
+
+	log.Println("Shutting down server...")
+
+	// Shutdown the server
+	if err := server.Shutdown(nil); err != nil {
+		log.Fatalf("Server shutdown error: %v", err)
+	}
+
+	pbConfig.App.ResetBootstrapState()
+
+	log.Println("Server and PocketBase stopped gracefully")
+}
+\n
+File: ./internal/db/seed/seed.go
+\n
+File: ./internal/db/repository.go
+\n
+File: ./internal/db/models/user_test.go
+package models
+
+import (
+	"testing"
+
+	"github.com/pocketbase/pocketbase/models"
+)
+
+func TestNewUser(t *testing.T) {
+	user := NewUser()
+	if user == nil {
+		t.Fatal("Expected non-nil User")
+	}
+	if user.Collection != "users" {
+		t.Errorf("Expected Collection to be 'users', got %s", user.Collection)
+	}
+}
+
+func TestUserValidation(t *testing.T) {
+	tests := []struct {
+		name      string
+		user      *User
+		wantError bool
+	}{
+		{
+			name: "Valid user",
+			user: &User{
+				Model: models.Model{
+					Id: "1234567890",
+				},
+				Username: "testuser",
+				Email:    "test@example.com",
+				Name:     "Test User",
+			},
+			wantError: false,
+		},
+		{
+			name: "Missing username",
+			user: &User{
+				Model: models.Model{
+					Id: "1234567890",
+				},
+				Email: "test@example.com",
+				Name:  "Test User",
+			},
+			wantError: true,
+		},
+		{
+			name: "Missing email",
+			user: &User{
+				Model: models.Model{
+					Id: "1234567890",
+				},
+				Username: "testuser",
+				Name:     "Test User",
+			},
+			wantError: true,
+		},
+		{
+			name: "Missing name",
+			user: &User{
+				Model: models.Model{
+					Id: "1234567890",
+				},
+				Username: "testuser",
+				Email:    "test@example.com",
+			},
+			wantError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.user.Validate()
+			if (err != nil) != tt.wantError {
+				t.Errorf("User.Validate() error = %v, wantError %v", err, tt.wantError)
+			}
+		})
+	}
+}
+\n
+File: ./internal/db/models/user.go
+package models
+
+import (
+	"errors"
+
+	"github.com/pocketbase/pocketbase/models"
+)
+
+type User struct {
+	models.Model
+
+	Username string `json:"username"`
+	Email    string `json:"email"`
+	Name     string `json:"name"`
+}
+
+func NewUser() *User {
+	return &User{
+		Model: models.Model{
+			Collection: "users",
+		},
+	}
+}
+
+func (u *User) Validate() error {
+	if u.Username == "" {
+		return errors.New("username is required")
+	}
+	if u.Email == "" {
+		return errors.New("email is required")
+	}
+	if u.Name == "" {
+		return errors.New("name is required")
+	}
+	return nil
+}
+\n
+File: ./internal/db/pocketbase/pocketbase.go
+\n
+File: ./internal/config/config.go
+package config
+
+import (
+	"log"
+	"os"
+	"path/filepath"
+
+	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/core"
+)
+
+type PocketBaseConfig struct {
+	App *pocketbase.PocketBase
+}
+
+func NewPocketBaseConfig() *PocketBaseConfig {
+	dataDir := filepath.Join(".", "pb_data")
+	if err := os.MkdirAll(dataDir, os.ModePerm); err != nil {
+		log.Fatalf("Failed to create data directory: %v", err)
+	}
+
+	app := pocketbase.New()
+
+	// Customize your PocketBase configuration here
+	app.OnBeforeServe().Add(func(e *core.ServeEvent) error {
+		// add your custom routes or other configurations
+		return nil
+	})
+
+	return &PocketBaseConfig{
+		App: app,
+	}
+}
+
+func (c *PocketBaseConfig) Start() error {
+	if err := c.App.Start(); err != nil {
+		return err
+	}
+	return nil
+}
+\n
+File: ./internal/config/config_test.go
+package config
+
+import (
+	"testing"
+)
+
+func TestNewPocketBaseConfig(t *testing.T) {
+	config := NewPocketBaseConfig()
+	if config == nil {
+		t.Fatal("Expected non-nil PocketBaseConfig")
+	}
+	if config.App == nil {
+		t.Fatal("Expected non-nil PocketBase app")
+	}
+}
+\n
+File: ./internal/handlers/user/user_test.go
+\n
+File: ./internal/handlers/user/user.go
+\n
+File: ./internal/handlers/stock/stock.go
+\n
+File: ./internal/handlers/stock/stock_test.go
+\n
+File: ./internal/services/user/user_test.go
+\n
+File: ./internal/services/user/user.go
+\n
+File: ./internal/services/stock/stock.go
+\n
+File: ./internal/services/stock/stock_test.go
+\n
+File: ./internal/utils/utils_test.go
+package main
+
+import (
+	"net/http"
+	"testing"
+)
+
+func TestAppError(t *testing.T) {
+	err := NewAppError(http.StatusNotFound, "Resource not found")
+	if err == nil {
+		t.Error("Expected error, got nil")
+	}
+	if err.Error() != "Error 404: Resource not found" {
+		t.Errorf("Unexpected error message: got %q", err.Error())
+	}
+}
+\n
+File: ./internal/utils/helpers/helpers.go
+\n
+File: ./internal/utils/response/response.go
+package response
+
+import (
+	"encoding/json"
+	"net/http"
+
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
+)
+
+func JSONResponse(w http.ResponseWriter, status int, data interface{}) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(data)
+}
+
+func ErrorResponse(w http.ResponseWriter, err error) {
+	httpErr, ok := err.(*httperrors.HTTPError)
+	if !ok {
+		httpErr = httperrors.NewHTTPError(http.StatusInternalServerError, "Internal Server Error")
+	}
+
+	JSONResponse(w, httpErr.StatusCode, map[string]string{"error": httpErr.Message})
+}
+\n
+File: ./internal/utils/response/response_test.go
+package response
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/api-moose/company-earnings/internal/errors/httperrors"
+)
+
+func TestJSONResponse(t *testing.T) {
+	w := httptest.NewRecorder()
+	data := map[string]string{"message": "success"}
+
+	JSONResponse(w, http.StatusOK, data)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status code %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var response map[string]string
+	err := json.Unmarshal(w.Body.Bytes(), &response)
+	if err != nil {
+		t.Fatalf("Error unmarshaling response: %v", err)
+	}
+
+	if response["message"] != "success" {
+		t.Errorf("Expected message 'success', got '%s'", response["message"])
+	}
+}
+
+func TestErrorResponse(t *testing.T) {
+	w := httptest.NewRecorder()
+	err := httperrors.NewHTTPError(http.StatusBadRequest, "invalid input")
+
+	ErrorResponse(w, err)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, w.Code)
+	}
+
+	var response map[string]string
+	jsonErr := json.Unmarshal(w.Body.Bytes(), &response)
+	if jsonErr != nil {
+		t.Fatalf("Error unmarshaling response: %v", jsonErr)
+	}
+
+	if response["error"] != "invalid input" {
+		t.Errorf("Expected error 'invalid input', got '%s'", response["error"])
+	}
+}
+\n
+File: ./internal/utils/logging/logging.go
+package logging
+
+import (
+	"log"
+	"net/http"
+	"time"
+)
+
+func LoggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+
+		// Wrap the response writer to capture the status code
+		wrappedWriter := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
+
+		// Call the next handler
+		next.ServeHTTP(wrappedWriter, r)
+
+		// Log the request details
+		log.Printf(
+			"%s %s %s %d %v",
+			r.RemoteAddr,
+			r.Method,
+			r.URL.Path,
+			wrappedWriter.statusCode,
+			time.Since(start),
+		)
+	})
+}
+
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.statusCode = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+\n
+File: ./internal/utils/logging/logging_test.go
+package logging
+
+import (
+	"bytes"
+	"log"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+func TestLoggingMiddleware(t *testing.T) {
+	// Create a buffer to capture log output
+	var buf bytes.Buffer
+	log.SetOutput(&buf)
+
+	// Create a test handler
+	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// Wrap the test handler with the logging middleware
+	handler := LoggingMiddleware(testHandler)
+
+	// Create a test request
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.RemoteAddr = "127.0.0.1:12345"
+
+	// Create a response recorder
+	rr := httptest.NewRecorder()
+
+	// Serve the request using the wrapped handler
+	handler.ServeHTTP(rr, req)
+
+	// Check if the status code is still correct
+	if status := rr.Code; status != http.StatusOK {
+		t.Errorf("handler returned wrong status code: got %v want %v",
+			status, http.StatusOK)
+	}
+
+	// Check if the log output contains expected information
+	logOutput := buf.String()
+	expectedEntries := []string{
+		"127.0.0.1:12345",
+		"GET",
+		"/test",
+		"200",
+	}
+
+	for _, entry := range expectedEntries {
+		if !strings.Contains(logOutput, entry) {
+			t.Errorf("Log output missing expected entry: %s", entry)
+		}
+	}
+}
+\n
+File: ./internal/utils/utils.go
+package main
+
+import "fmt"
+
+// AppError represents an application-level error.
+type AppError struct {
+    StatusCode int
+    Message    string
+}
+
+func (e *AppError) Error() string {
+    return fmt.Sprintf("Error %d: %s", e.StatusCode, e.Message)
+}
+
+// NewAppError creates a new AppError instance.
+func NewAppError(statusCode int, message string) *AppError {
+    return &AppError{
+        StatusCode: statusCode,
+        Message:    message,
+    }
+}\n
+File: ./internal/middleware/tenancy/tenant.go
+package tenancy
+
+import (
+	"context"
+	"net/http"
+)
+
+type contextKey string
+
+const tenantContextKey contextKey = "tenantID"
+
+func TenantMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tenantID := r.Header.Get("X-Tenant-ID")
+		if tenantID == "" {
+			http.Error(w, "Tenant ID is required", http.StatusBadRequest)
+			return
+		}
+
+		ctx := context.WithValue(r.Context(), tenantContextKey, tenantID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+// GetTenantID retrieves the tenant ID from the request context
+func GetTenantID(r *http.Request) (string, bool) {
+	tenantID, ok := r.Context().Value(tenantContextKey).(string)
+	return tenantID, ok
+}
+\n
+File: ./internal/middleware/tenancy/tenant_test.go
+package tenancy
+
+import (
+	"net/http"
+	"net/http/httptest"
+	"testing"
+)
+
+func TestTenantMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		tenantID       string
+		expectedStatus int
+	}{
+		{"Valid tenant", "tenant1", http.StatusOK},
+		{"Missing tenant", "", http.StatusBadRequest},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", "/", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tt.tenantID != "" {
+				req.Header.Set("X-Tenant-ID", tt.tenantID)
+			}
+
+			rr := httptest.NewRecorder()
+			handler := TenantMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tenantID, ok := r.Context().Value(tenantContextKey).(string)
+				if !ok {
+					http.Error(w, "Tenant context not found", http.StatusInternalServerError)
+					return
+				}
+				if tenantID == "" {
+					http.Error(w, "Tenant ID is required", http.StatusBadRequest)
+					return
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			handler.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tt.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v",
+					status, tt.expectedStatus)
+			}
+		})
+	}
+}
+\n
+File: ./internal/middleware/auth/auth.go
+package auth
+
+import (
+	"context"
+	"net/http"
+	"strings"
+
+	"github.com/pocketbase/pocketbase/core"
+)
+
+func AuthMiddleware(app core.App) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			authHeader := r.Header.Get("Authorization")
+			if authHeader == "" {
+				http.Error(w, "Missing authorization header", http.StatusUnauthorized)
+				return
+			}
+
+			parts := strings.SplitN(authHeader, " ", 2)
+			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
+				http.Error(w, "Invalid authorization header format", http.StatusUnauthorized)
+				return
+			}
+
+			token := parts[1]
+			record, err := app.Dao().FindAuthRecordByToken(
+				token,
+				app.Settings().RecordAuthToken.Secret,
+			)
+			if err != nil || record == nil {
+				http.Error(w, "Invalid token", http.StatusUnauthorized)
+				return
+			}
+
+			ctx := context.WithValue(r.Context(), "user", record)
+			next.ServeHTTP(w, r.WithContext(ctx))
+		})
+	}
+}
+\n
+File: ./internal/middleware/auth/auth_test.go
+package auth
+
+import (
+	"context"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/daos"
+	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/models/schema"
+	"github.com/pocketbase/pocketbase/tools/store"
+)
+
+type MockApp struct {
+	RecordData *models.Record
+}
+
+func (m *MockApp) Dao() *daos.Dao {
+	return &daos.Dao{}
+}
+
+func (m *MockApp) FindAuthRecordByToken(token string, baseTokenKey string) (*models.Record, error) {
+	if m.RecordData != nil {
+		return m.RecordData, nil
+	}
+	return nil, nil
+}
+
+func (m *MockApp) Settings() *core.Settings {
+	return &core.Settings{
+		RecordAuthToken: &core.TokenConfig{Secret: "test_secret"},
+	}
+}
+
+func (m *MockApp) Bootstrap() error                                          { return nil }
+func (m *MockApp) ResetBootstrapState() error                                { return nil }
+func (m *MockApp) CreateBackup(context.Context, ...string) error             { return nil }
+func (m *MockApp) RestoreBackup(context.Context, io.Reader, ...string) error { return nil }
+func (m *MockApp) Migrate() error                                            { return nil }
+func (m *MockApp) IsBootstrapped() bool                                      { return true }
+func (m *MockApp) RefreshSettings() error                                    { return nil }
+func (m *MockApp) Cache() *store.Store[any] {
+	return nil // or implement a mock cache if needed
+}
+
+func TestAuthMiddleware(t *testing.T) {
+	collection := &models.Collection{
+		Name: "users",
+		Schema: schema.NewSchema(
+			&schema.SchemaField{Name: "email", Type: schema.FieldTypeEmail},
+		),
+	}
+
+	tests := []struct {
+		name           string
+		token          string
+		record         *models.Record
+		expectedStatus int
+	}{
+		{
+			name:           "Valid token",
+			token:          "valid_token",
+			record:         models.NewRecord(collection),
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Missing token",
+			token:          "",
+			record:         nil,
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "Invalid token",
+			token:          "invalid_token",
+			record:         nil,
+			expectedStatus: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.record != nil {
+				tt.record.Set("email", "test@example.com")
+			}
+
+			mockApp := &MockApp{RecordData: tt.record}
+
+			req, err := http.NewRequest("GET", "/test", nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if tt.token != "" {
+				req.Header.Set("Authorization", "Bearer "+tt.token)
+			}
+
+			rr := httptest.NewRecorder()
+
+			handler := AuthMiddleware(mockApp)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				user, ok := r.Context().Value("user").(*models.Record)
+				if !ok {
+					t.Error("User not found in context")
+				}
+				if user != tt.record {
+					t.Error("User in context does not match expected user")
+				}
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			handler.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tt.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v", status, tt.expectedStatus)
+			}
+		})
+	}
+}
+\n
+File: ./internal/middleware/access_control/access_control.go
+package access_control
+
+import (
+	"net/http"
+
+	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
+	"github.com/pocketbase/pocketbase/models"
+)
+
+func RBACMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := r.Context().Value("user").(*models.User)
+		if !ok {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+
+		tenantID, ok := middleware.GetTenantID(r)
+		if !ok {
+			http.Error(w, "Tenant context not found", http.StatusInternalServerError)
+			return
+		}
+
+		role, _ := user.GetDataValue("role").(string)
+		if !isAuthorized(role, r.URL.Path, tenantID) {
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+func isAuthorized(role, path, tenantID string) bool {
+	// This is a simple authorization logic. In a real-world scenario,
+	// you might want to use a more sophisticated system, possibly involving a database lookup.
+	switch role {
+	case "admin":
+		return true // Admins have access to all routes
+	case "user":
+		return path == "/user" // Users only have access to the /user route
+	default:
+		return false // Unknown roles have no access
+	}
+}
+\n
+File: ./internal/middleware/access_control/access_control_test.go
+package access_control
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"github.com/pocketbase/pocketbase/models"
+)
+
+func TestRBACMiddleware(t *testing.T) {
+	tests := []struct {
+		name           string
+		role           string
+		path           string
+		tenantID       string
+		expectedStatus int
+	}{
+		{"Admin access to admin route", "admin", "/admin", "tenant1", http.StatusOK},
+		{"Admin access to user route", "admin", "/user", "tenant1", http.StatusOK},
+		{"User access to user route", "user", "/user", "tenant1", http.StatusOK},
+		{"User access to admin route", "user", "/admin", "tenant1", http.StatusForbidden},
+		{"No role", "", "/user", "tenant1", http.StatusUnauthorized},
+		{"Invalid role", "invalid", "/user", "tenant1", http.StatusForbidden},
+		{"Cross-tenant access attempt", "admin", "/admin", "tenant2", http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req, err := http.NewRequest("GET", tt.path, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Set up the context with tenant and user information
+			ctx := req.Context()
+			ctx = context.WithValue(ctx, middleware.TenantContextKey, tt.tenantID)
+			user := &models.User{}
+			user.SetDataValue("role", tt.role)
+			ctx = context.WithValue(ctx, "user", user)
+			req = req.WithContext(ctx)
+
+			rr := httptest.NewRecorder()
+			handler := RBACMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}))
+
+			handler.ServeHTTP(rr, req)
+
+			if status := rr.Code; status != tt.expectedStatus {
+				t.Errorf("handler returned wrong status code: got %v want %v",
+					status, tt.expectedStatus)
+			}
+		})
+	}
+}
 \n
 File: ./internal/errors/dberrors/dberrors.go
 package dberrors
