@@ -13,6 +13,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		// Wrap the response writer to capture the status code
 		wrappedWriter := &responseWriter{ResponseWriter: w, statusCode: http.StatusOK}
 
+		log.Printf("LoggingMiddleware: %s %s", r.Method, r.URL.Path)
 		// Call the next handler
 		next.ServeHTTP(wrappedWriter, r)
 

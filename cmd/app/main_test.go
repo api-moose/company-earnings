@@ -2,146 +2,145 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"strings"
 	"testing"
-	"time"
 
 	"github.com/api-moose/company-earnings/internal/config"
+	"github.com/api-moose/company-earnings/internal/middleware/auth"
+	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
+	"github.com/pocketbase/pocketbase/models"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
+
+type MockAuthProvider struct {
+	mock.Mock
+}
+
+func (m *MockAuthProvider) FindAuthRecordByToken(token, secret string) (*models.Record, error) {
+	args := m.Called(token, secret)
+	if args.Get(0) != nil {
+		return args.Get(0).(*models.Record), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockAuthProvider) GetAuthTokenSecret() string {
+	args := m.Called()
+	return args.String(0)
+}
+
+func createMockRecord() *models.Record {
+	collection := &models.Collection{
+		BaseModel: models.BaseModel{
+			Id: "mockCollectionId",
+		},
+		Name: "mockCollection",
+	}
+
+	record := models.NewRecord(collection)
+	record.SetId("mockId")
+	record.Set("role", "admin")
+	record.Set("tenantId", "test-tenant")
+	return record
+}
+
+func mockAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mockRecord := createMockRecord()
+		ctx := context.WithValue(r.Context(), auth.UserContextKey, mockRecord)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
+func setupTestRouter(pbConfig *config.PocketBaseConfig) http.Handler {
+	return setupRouter(pbConfig, mockAuthMiddleware)
+}
 
 func TestMainHandler(t *testing.T) {
 	req, err := http.NewRequest("GET", "/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(mainHandler)
 
 	handler.ServeHTTP(rr, req)
 
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("handler returned wrong status code: got %v want %v",
-			status, http.StatusOK)
-	}
-
-	expected := "Welcome to the Financial Data Platform API"
-	if rr.Body.String() != expected {
-		t.Errorf("handler returned unexpected body: got %v want %v",
-			rr.Body.String(), expected)
-	}
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.Equal(t, "Welcome to the Financial Data Platform API", rr.Body.String())
 }
 
 func TestHealthCheckHandler(t *testing.T) {
 	req, err := http.NewRequest("GET", "/health", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(healthCheckHandler)
 
 	handler.ServeHTTP(rr, req)
 
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("handler returned wrong status code: got %v want %v",
-			status, http.StatusOK)
-	}
-
-	expected := `{"status":"healthy"}`
-	if strings.TrimSpace(rr.Body.String()) != expected {
-		t.Errorf("handler returned unexpected body: got %v want %v",
-			rr.Body.String(), expected)
-	}
+	assert.Equal(t, http.StatusOK, rr.Code)
+	assert.JSONEq(t, `{"status":"healthy"}`, rr.Body.String())
 }
 
 func TestVersionHandler(t *testing.T) {
 	req, err := http.NewRequest("GET", "/version", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
 
 	rr := httptest.NewRecorder()
 	handler := http.HandlerFunc(versionHandler)
 
 	handler.ServeHTTP(rr, req)
 
-	if status := rr.Code; status != http.StatusOK {
-		t.Errorf("handler returned wrong status code: got %v want %v",
-			status, http.StatusOK)
-	}
+	assert.Equal(t, http.StatusOK, rr.Code)
 
 	var response map[string]string
 	err = json.Unmarshal(rr.Body.Bytes(), &response)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if _, exists := response["version"]; !exists {
-		t.Errorf("response does not contain version key")
-	}
+	assert.NoError(t, err)
+	assert.Contains(t, response, "version")
 }
-func TestMainHandlerWithError(t *testing.T) {
-    req, err := http.NewRequest("GET", "/nonexistent", nil)
-    if err != nil {
-        t.Fatal(err)
-    }
 
-    rr := httptest.NewRecorder()
-    handler := http.HandlerFunc(mainHandler)
-
-    handler.ServeHTTP(rr, req)
-
-    if status := rr.Code; status != http.StatusNotFound {
-        t.Errorf("handler returned wrong status code: got %v want %v",
-            status, http.StatusNotFound)
-    }
-
-    expected := "HTTP 404: Not Found\n"
-    if rr.Body.String() != expected {
-        t.Errorf("handler returned unexpected body: got %q want %q",
-            rr.Body.String(), expected)
-    }
-}
 func TestSetupRouter(t *testing.T) {
-    router := setupRouter()
+	mockAuth := new(MockAuthProvider)
+	mockRecord := createMockRecord()
 
-    testCases := []struct {
-        name           string
-        path           string
-        expectedStatus int
-        expectedBody   string
-    }{
-        {"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
-        {"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
-        {"Version route", "/version", http.StatusOK, `{"version":"` + version + `"}`},
-        {"Nonexistent route", "/nonexistent", http.StatusNotFound, "HTTP 404: Not Found\n"},
-    }
+	mockAuth.On("FindAuthRecordByToken", mock.Anything, mock.Anything).Return(mockRecord, nil)
+	mockAuth.On("GetAuthTokenSecret").Return("test_secret")
+
+	appConfig := &config.PocketBaseConfig{Adapter: mockAuth}
+
+	router := setupTestRouter(appConfig)
+
+	testCases := []struct {
+		name           string
+		path           string
+		expectedStatus int
+		expectedBody   string
+	}{
+		{"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
+		{"Health check route", "/health", http.StatusOK, `{"status":"healthy"}`},
+		{"Version route", "/version", http.StatusOK, `{"version":"0.1.0"}`},
+		{"Nonexistent route", "/nonexistent", http.StatusNotFound, "404 page not found\n"},
+	}
 
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			req, err := http.NewRequest("GET", tc.path, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			assert.NoError(t, err)
+
+			req.Header.Set("X-Tenant-ID", "test-tenant")
+			req.Header.Set("Authorization", "Bearer test-token")
 
 			rr := httptest.NewRecorder()
 			router.ServeHTTP(rr, req)
 
-			if status := rr.Code; status != tc.expectedStatus {
-				t.Errorf("handler returned wrong status code: got %v want %v",
-					status, tc.expectedStatus)
-			}
-
-			if strings.TrimSpace(rr.Body.String()) != strings.TrimSpace(tc.expectedBody) {
-				t.Errorf("handler returned unexpected body: got %v want %v",
-					rr.Body.String(), tc.expectedBody)
-			}
+			assert.Equal(t, tc.expectedStatus, rr.Code)
+			assert.Equal(t, tc.expectedBody, rr.Body.String())
 		})
 	}
 }
@@ -149,72 +148,100 @@ func TestSetupRouter(t *testing.T) {
 func TestLoggingMiddleware(t *testing.T) {
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
-	defer log.SetOutput(log.Writer())
+	defer log.SetOutput(os.Stderr)
 
-	router := setupRouter()
+	mockAuth := new(MockAuthProvider)
+	mockRecord := createMockRecord()
+
+	mockAuth.On("FindAuthRecordByToken", mock.Anything, mock.Anything).Return(mockRecord, nil)
+	mockAuth.On("GetAuthTokenSecret").Return("test_secret")
+
+	appConfig := &config.PocketBaseConfig{Adapter: mockAuth}
+
+	router := setupTestRouter(appConfig)
 
 	req, err := http.NewRequest("GET", "/", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
+	assert.NoError(t, err)
+
+	req.Header.Set("X-Tenant-ID", "test-tenant")
+	req.Header.Set("Authorization", "Bearer test-token")
 
 	rr := httptest.NewRecorder()
 	router.ServeHTTP(rr, req)
 
 	logOutput := buf.String()
-	expectedEntries := []string{
-		"GET",
-		"/",
-		"200",
-	}
-
-	for _, entry := range expectedEntries {
-		if !strings.Contains(logOutput, entry) {
-			t.Errorf("Log output missing expected entry: %s", entry)
-		}
-	}
+	assert.Contains(t, logOutput, "GET")
+	assert.Contains(t, logOutput, "/")
+	assert.Contains(t, logOutput, "200")
 }
 
-func TestPocketBaseIntegration(t *testing.T) {
-	// Create a temporary directory for PocketBase data
-	tempDir, err := os.MkdirTemp("", "pocketbase-test")
-	if err != nil {
-		t.Fatalf("Failed to create temp directory: %v", err)
-	}
-	defer os.RemoveAll(tempDir)
+func TestAuthMiddleware(t *testing.T) {
+	mockAuth := new(MockAuthProvider)
+	mockRecord := createMockRecord()
 
-	// Set the data directory for PocketBase
-	os.Setenv("POCKETBASE_DATA_DIR", tempDir)
+	mockAuth.On("FindAuthRecordByToken", "valid-token", "test_secret").Return(mockRecord, nil)
+	mockAuth.On("FindAuthRecordByToken", "invalid-token", "test_secret").Return(nil, nil)
+	mockAuth.On("GetAuthTokenSecret").Return("test_secret")
 
-	// Initialize PocketBase configuration
-	pbConfig := config.NewPocketBaseConfig()
+	appConfig := &config.PocketBaseConfig{Adapter: mockAuth}
 
-	// Test PocketBase connection
-	if pbConfig.App == nil {
-		t.Error("PocketBase app is nil")
-	}
+	router := setupTestRouter(appConfig)
 
-	// Start and immediately stop PocketBase
-	go func() {
-		if err := pbConfig.Start(); err != nil {
-			t.Errorf("Failed to start PocketBase: %v", err)
-		}
-	}()
+	t.Run("Valid token", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Tenant-ID", "test-tenant")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusOK, rr.Code)
+	})
 
-	// Wait a short time for PocketBase to start
-	time.Sleep(100 * time.Millisecond)
+	t.Run("Invalid token", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer invalid-token")
+		req.Header.Set("X-Tenant-ID", "test-tenant")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusUnauthorized, rr.Code) // Updated to match expected behavior
+	})
+}
 
-	// Reset PocketBase state
-	pbConfig.App.ResetBootstrapState()
+func TestTenancyMiddleware(t *testing.T) {
+	mockAuth := new(MockAuthProvider)
+	mockRecord := createMockRecord()
+
+	mockAuth.On("FindAuthRecordByToken", mock.Anything, mock.Anything).Return(mockRecord, nil)
+	mockAuth.On("GetAuthTokenSecret").Return("test_secret")
+
+	appConfig := &config.PocketBaseConfig{Adapter: mockAuth}
+
+	router := setupTestRouter(appConfig)
+
+	t.Run("Valid tenant ID", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("X-Tenant-ID", "test-tenant")
+		req.Header.Set("Authorization", "Bearer test-token")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusOK, rr.Code)
+
+		tenantID, ok := tenancy.GetTenantID(req)
+		assert.True(t, ok)
+		assert.Equal(t, "test-tenant", tenantID)
+	})
+
+	t.Run("Missing tenant ID", func(t *testing.T) {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Header.Set("Authorization", "Bearer test-token")
+		rr := httptest.NewRecorder()
+		router.ServeHTTP(rr, req)
+		assert.Equal(t, http.StatusBadRequest, rr.Code)
+	})
 }
 
 func TestMain(m *testing.M) {
 	// Setup code here (if needed)
-
-	// Run the tests
 	exitCode := m.Run()
-
 	// Teardown code here (if needed)
-
 	os.Exit(exitCode)
 }

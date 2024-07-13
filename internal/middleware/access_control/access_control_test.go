@@ -1,4 +1,3 @@
-// access_control_test.go
 package access_control
 
 import (
@@ -7,9 +6,35 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
 	"github.com/pocketbase/pocketbase/models"
+	"github.com/pocketbase/pocketbase/models/schema"
 )
+
+func createTestUserRecord(role, tenantID string) *models.Record {
+	// Create a new collection schema
+	collection := &models.Collection{
+		Name: "users",
+		Schema: schema.NewSchema(
+			&schema.SchemaField{
+				Name: "role",
+				Type: schema.FieldTypeText,
+			},
+			&schema.SchemaField{
+				Name: "tenantId",
+				Type: schema.FieldTypeText,
+			},
+		),
+	}
+
+	// Initialize the record with the collection schema
+	record := models.NewRecord(collection)
+	record.Set("role", role)
+	record.Set("tenantId", tenantID)
+
+	return record
+}
 
 func TestRBACMiddleware(t *testing.T) {
 	tests := []struct {
@@ -37,12 +62,11 @@ func TestRBACMiddleware(t *testing.T) {
 			}
 
 			// Set up the context with tenant and user information
-			ctx := req.Context()
-			ctx = context.WithValue(ctx, tenancy.TenantContextKey, tt.tenantID)
-			user := models.NewRecord(&models.Collection{})
-			user.Set("role", tt.role)
-			user.Set("tenantId", tt.userTenantID)
-			ctx = context.WithValue(ctx, "user", user)
+			ctx := context.WithValue(req.Context(), tenancy.TenantContextKey, tt.tenantID)
+
+			// Create a properly initialized user record
+			user := createTestUserRecord(tt.role, tt.userTenantID)
+			ctx = context.WithValue(ctx, auth.UserContextKey, user)
 			req = req.WithContext(ctx)
 
 			rr := httptest.NewRecorder()

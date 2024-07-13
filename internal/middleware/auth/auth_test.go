@@ -31,9 +31,12 @@ func TestAuthMiddleware(t *testing.T) {
 	}
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user := r.Context().Value("user").(*models.Record)
+		user, ok := GetUserFromContext(r)
+		if !ok {
+			t.Error("Expected user record not found in context")
+		}
 		if user != record {
-			t.Errorf("Expected user record not found in context")
+			t.Error("User in context does not match expected record")
 		}
 	})
 
