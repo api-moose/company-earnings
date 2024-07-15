@@ -1,46 +1,48 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
-	"github.com/pocketbase/pocketbase/models"
+	"firebase.google.com/go/v4/auth"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
-// MockAuthApp implements the AuthApp interface for testing
-type MockAuthApp struct {
-	record *models.Record
+type MockFirebaseClient struct {
+	mock.Mock
 }
 
-func (m *MockAuthApp) FindAuthRecordByToken(token, secret string) (*models.Record, error) {
-	if token == "valid_token" {
-		return m.record, nil
+func (m *MockFirebaseClient) VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error) {
+	args := m.Called(ctx, idToken)
+	if args.Get(0) != nil {
+		return args.Get(0).(*auth.Token), args.Error(1)
 	}
-	return nil, nil
-}
-
-func (m *MockAuthApp) GetAuthTokenSecret() string {
-	return "secret_key"
+	return nil, args.Error(1)
 }
 
 func TestAuthMiddleware(t *testing.T) {
-	record := &models.Record{}
-	app := &MockAuthApp{
-		record: record,
-	}
+	mockClient := new(MockFirebaseClient)
+	validToken := &auth.Token{UID: "valid_user", Claims: map[string]interface{}{"email": "test@example.com"}}
+	mockClient.On("VerifyIDToken", mock.Anything, "valid_token").Return(validToken, nil)
+	mockClient.On("VerifyIDToken", mock.Anything, "invalid_token").Return(nil, assert.AnError)
+
+	am := NewAuthMiddleware(mockClient)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := GetUserFromContext(r)
 		if !ok {
-			t.Error("Expected user record not found in context")
+			t.Error("Expected user in context, got none")
 		}
-		if user != record {
-			t.Error("User in context does not match expected record")
+		if user.Email != "test@example.com" {
+			t.Errorf("Expected email 'test@example.com', got '%s'", user.Email)
 		}
+		w.WriteHeader(http.StatusOK)
 	})
 
-	mw := AuthMiddleware(app)(handler)
+	wrappedHandler := am.Middleware(handler)
 
 	tests := []struct {
 		name           string
@@ -60,11 +62,11 @@ func TestAuthMiddleware(t *testing.T) {
 			}
 			w := httptest.NewRecorder()
 
-			mw.ServeHTTP(w, req)
+			wrappedHandler.ServeHTTP(w, req)
 
-			if w.Code != tt.expectedStatus {
-				t.Errorf("Expected status %d, got %d", tt.expectedStatus, w.Code)
-			}
+			assert.Equal(t, tt.expectedStatus, w.Code)
 		})
 	}
+
+	mockClient.AssertExpectations(t)
 }

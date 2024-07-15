@@ -24,22 +24,19 @@ func RBACMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		role, _ := user.Get("role").(string)
-		userTenantID, _ := user.Get("tenantId").(string)
-
-		if role == "" {
+		if user.Role == "" {
 			log.Println("RBACMiddleware: Role not found in user record")
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 
-		if userTenantID != tenantID {
+		if user.TenantID != tenantID {
 			log.Println("RBACMiddleware: Tenant ID mismatch")
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
-		if !isAuthorized(role, r.URL.Path) {
+		if !isAuthorized(user.Role, r.URL.Path) {
 			log.Println("RBACMiddleware: User not authorized")
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return

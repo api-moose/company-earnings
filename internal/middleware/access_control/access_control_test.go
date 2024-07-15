@@ -6,67 +6,78 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/api-moose/company-earnings/internal/db/models"
 	"github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
-	"github.com/pocketbase/pocketbase/models"
-	"github.com/pocketbase/pocketbase/models/schema"
+	"github.com/stretchr/testify/assert"
 )
-
-func createTestUserRecord(role, tenantID string) *models.Record {
-	// Create a new collection schema
-	collection := &models.Collection{
-		Name: "users",
-		Schema: schema.NewSchema(
-			&schema.SchemaField{
-				Name: "role",
-				Type: schema.FieldTypeText,
-			},
-			&schema.SchemaField{
-				Name: "tenantId",
-				Type: schema.FieldTypeText,
-			},
-		),
-	}
-
-	// Initialize the record with the collection schema
-	record := models.NewRecord(collection)
-	record.Set("role", role)
-	record.Set("tenantId", tenantID)
-
-	return record
-}
 
 func TestRBACMiddleware(t *testing.T) {
 	tests := []struct {
 		name           string
-		role           string
+		user           *models.User
 		path           string
 		tenantID       string
-		userTenantID   string
 		expectedStatus int
 	}{
-		{"Admin access to admin route", "admin", "/admin", "tenant1", "tenant1", http.StatusOK},
-		{"Admin access to user route", "admin", "/user", "tenant1", "tenant1", http.StatusOK},
-		{"User access to user route", "user", "/user", "tenant1", "tenant1", http.StatusOK},
-		{"User access to admin route", "user", "/admin", "tenant1", "tenant1", http.StatusForbidden},
-		{"No role", "", "/user", "tenant1", "tenant1", http.StatusUnauthorized},
-		{"Invalid role", "invalid", "/user", "tenant1", "tenant1", http.StatusForbidden},
-		{"Cross-tenant access attempt", "admin", "/admin", "tenant1", "tenant2", http.StatusForbidden},
+		{
+			name:           "Admin access to admin route",
+			user:           models.NewUser("1", "admin", "admin@example.com", "admin", "admin-token", "tenant1"),
+			path:           "/admin",
+			tenantID:       "tenant1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "Admin access to user route",
+			user:           models.NewUser("1", "admin", "admin@example.com", "admin", "admin-token", "tenant1"),
+			path:           "/user",
+			tenantID:       "tenant1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "User access to user route",
+			user:           models.NewUser("2", "user", "user@example.com", "user", "user-token", "tenant1"),
+			path:           "/user",
+			tenantID:       "tenant1",
+			expectedStatus: http.StatusOK,
+		},
+		{
+			name:           "User access to admin route",
+			user:           models.NewUser("2", "user", "user@example.com", "user", "user-token", "tenant1"),
+			path:           "/admin",
+			tenantID:       "tenant1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "No role",
+			user:           models.NewUser("3", "norole", "norole@example.com", "", "norole-token", "tenant1"),
+			path:           "/user",
+			tenantID:       "tenant1",
+			expectedStatus: http.StatusUnauthorized,
+		},
+		{
+			name:           "Invalid role",
+			user:           models.NewUser("4", "invalid", "invalid@example.com", "invalid", "invalid-token", "tenant1"),
+			path:           "/user",
+			tenantID:       "tenant1",
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:           "Cross-tenant access attempt",
+			user:           models.NewUser("1", "admin", "admin@example.com", "admin", "admin-token", "tenant1"),
+			path:           "/admin",
+			tenantID:       "tenant2",
+			expectedStatus: http.StatusForbidden,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, err := http.NewRequest("GET", tt.path, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			assert.NoError(t, err)
 
-			// Set up the context with tenant and user information
 			ctx := context.WithValue(req.Context(), tenancy.TenantContextKey, tt.tenantID)
-
-			// Create a properly initialized user record
-			user := createTestUserRecord(tt.role, tt.userTenantID)
-			ctx = context.WithValue(ctx, auth.UserContextKey, user)
+			ctx = context.WithValue(ctx, auth.UserContextKey, tt.user)
 			req = req.WithContext(ctx)
 
 			rr := httptest.NewRecorder()
@@ -76,10 +87,7 @@ func TestRBACMiddleware(t *testing.T) {
 
 			handler.ServeHTTP(rr, req)
 
-			if status := rr.Code; status != tt.expectedStatus {
-				t.Errorf("handler returned wrong status code: got %v want %v",
-					status, tt.expectedStatus)
-			}
+			assert.Equal(t, tt.expectedStatus, rr.Code)
 		})
 	}
 }

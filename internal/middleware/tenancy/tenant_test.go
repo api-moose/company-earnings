@@ -1,52 +1,79 @@
 package tenancy
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"firebase.google.com/go/v4/auth"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/mock"
 )
 
+type MockFirebaseClient struct {
+	mock.Mock
+}
+
+func (m *MockFirebaseClient) VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error) {
+	args := m.Called(ctx, idToken)
+	if args.Get(0) != nil {
+		return args.Get(0).(*auth.Token), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
 func TestTenantMiddleware(t *testing.T) {
+	mockClient := new(MockFirebaseClient)
+
+	validToken := &auth.Token{
+		UID: "valid_user",
+		Claims: map[string]interface{}{
+			"tenantID": "tenant1",
+		},
+	}
+	mockClient.On("VerifyIDToken", mock.Anything, "valid_token").Return(validToken, nil)
+	mockClient.On("VerifyIDToken", mock.Anything, "invalid_token").Return(nil, assert.AnError)
+
+	tm := NewTenantMiddleware(mockClient)
+
 	tests := []struct {
 		name           string
+		token          string
 		tenantID       string
 		expectedStatus int
 	}{
-		{"Valid tenant", "tenant1", http.StatusOK},
-		{"Missing tenant", "", http.StatusBadRequest},
+		{"Valid token and tenant ID", "Bearer valid_token", "tenant1", http.StatusOK},
+		{"Missing token", "", "tenant1", http.StatusUnauthorized},
+		{"Invalid token", "Bearer invalid_token", "tenant1", http.StatusUnauthorized},
+		{"Tenant ID mismatch", "Bearer valid_token", "tenant2", http.StatusUnauthorized},
+		{"Missing tenant ID", "Bearer valid_token", "", http.StatusBadRequest},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req, err := http.NewRequest("GET", "/", nil)
-			if err != nil {
-				t.Fatal(err)
-			}
+			assert.NoError(t, err)
 
+			if tt.token != "" {
+				req.Header.Set("Authorization", tt.token)
+			}
 			if tt.tenantID != "" {
 				req.Header.Set("X-Tenant-ID", tt.tenantID)
 			}
 
 			rr := httptest.NewRecorder()
-			handler := TenantMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				tenantID, ok := r.Context().Value(TenantContextKey).(string)
-				if !ok {
-					http.Error(w, "Tenant context not found", http.StatusInternalServerError)
-					return
-				}
-				if tenantID == "" {
-					http.Error(w, "Tenant ID is required", http.StatusBadRequest)
-					return
-				}
+			handler := tm.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tenantID, ok := GetTenantID(r)
+				assert.True(t, ok)
+				assert.Equal(t, tt.tenantID, tenantID)
 				w.WriteHeader(http.StatusOK)
 			}))
 
 			handler.ServeHTTP(rr, req)
-
-			if status := rr.Code; status != tt.expectedStatus {
-				t.Errorf("handler returned wrong status code: got %v want %v",
-					status, tt.expectedStatus)
-			}
+			assert.Equal(t, tt.expectedStatus, rr.Code)
 		})
 	}
+
+	mockClient.AssertExpectations(t)
 }

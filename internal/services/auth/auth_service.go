@@ -1,19 +1,28 @@
 package auth
 
 import (
-	"github.com/api-moose/company-earnings/internal/config"
-	"github.com/pocketbase/pocketbase/models"
+	"context"
+
+	"firebase.google.com/go/v4/auth"
 )
 
+type FirebaseAuthClient interface {
+	VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error)
+	GetUser(ctx context.Context, uid string) (*auth.UserRecord, error)
+}
+
 type AuthService struct {
-	adapter config.AuthProvider
+	client FirebaseAuthClient
 }
 
-func NewAuthService(adapter config.AuthProvider) *AuthService {
-	return &AuthService{adapter: adapter}
+func NewAuthService(client FirebaseAuthClient) *AuthService {
+	return &AuthService{client: client}
 }
 
-func (s *AuthService) AuthenticateUser(token string) (*models.Record, error) {
-	secret := s.adapter.GetAuthTokenSecret()
-	return s.adapter.FindAuthRecordByToken(token, secret)
+func (s *AuthService) AuthenticateUser(ctx context.Context, token string) (*auth.UserRecord, error) {
+	decodedToken, err := s.client.VerifyIDToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return s.client.GetUser(ctx, decodedToken.UID)
 }

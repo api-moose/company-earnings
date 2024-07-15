@@ -2,78 +2,79 @@ package models
 
 import (
 	"testing"
-
-	"github.com/pocketbase/pocketbase/models"
 )
 
 func TestNewUser(t *testing.T) {
-	user := NewUser()
-	if user == nil {
-		t.Fatal("Expected non-nil User")
+	user := NewUser("1", "testuser", "test@example.com", "user", "token123", "tenant1")
+
+	if user.ID != "1" {
+		t.Errorf("Expected ID '1', got '%s'", user.ID)
 	}
-	if user.Collection != "users" {
-		t.Errorf("Expected Collection to be 'users', got %s", user.Collection)
+	if user.Username != "testuser" {
+		t.Errorf("Expected Username 'testuser', got '%s'", user.Username)
+	}
+	if user.Email != "test@example.com" {
+		t.Errorf("Expected Email 'test@example.com', got '%s'", user.Email)
+	}
+	if user.Role != "user" {
+		t.Errorf("Expected Role 'user', got '%s'", user.Role)
+	}
+	if user.Token != "token123" {
+		t.Errorf("Expected Token 'token123', got '%s'", user.Token)
+	}
+	if user.TenantID != "tenant1" {
+		t.Errorf("Expected TenantID 'tenant1', got '%s'", user.TenantID)
 	}
 }
 
-func TestUserValidation(t *testing.T) {
+func TestUserValidate(t *testing.T) {
 	tests := []struct {
-		name      string
-		user      *User
-		wantError bool
+		name    string
+		user    *User
+		wantErr bool
 	}{
 		{
-			name: "Valid user",
-			user: &User{
-				Model: models.Model{
-					Id: "1234567890",
-				},
-				Username: "testuser",
-				Email:    "test@example.com",
-				Name:     "Test User",
-			},
-			wantError: false,
+			name:    "Valid user",
+			user:    NewUser("1", "testuser", "test@example.com", "user", "token123", "tenant1"),
+			wantErr: false,
 		},
 		{
-			name: "Missing username",
-			user: &User{
-				Model: models.Model{
-					Id: "1234567890",
-				},
-				Email: "test@example.com",
-				Name:  "Test User",
-			},
-			wantError: true,
+			name:    "Missing ID",
+			user:    NewUser("", "testuser", "test@example.com", "user", "token123", "tenant1"),
+			wantErr: true,
 		},
 		{
-			name: "Missing email",
-			user: &User{
-				Model: models.Model{
-					Id: "1234567890",
-				},
-				Username: "testuser",
-				Name:     "Test User",
-			},
-			wantError: true,
+			name:    "Missing Username",
+			user:    NewUser("1", "", "test@example.com", "user", "token123", "tenant1"),
+			wantErr: true,
 		},
 		{
-			name: "Missing name",
-			user: &User{
-				Model: models.Model{
-					Id: "1234567890",
-				},
-				Username: "testuser",
-				Email:    "test@example.com",
-			},
-			wantError: true,
+			name:    "Missing Email",
+			user:    NewUser("1", "testuser", "", "user", "token123", "tenant1"),
+			wantErr: true,
+		},
+		{
+			name:    "Missing Role",
+			user:    NewUser("1", "testuser", "test@example.com", "", "token123", "tenant1"),
+			wantErr: true,
+		},
+		{
+			name:    "Missing Token",
+			user:    NewUser("1", "testuser", "test@example.com", "user", "", "tenant1"),
+			wantErr: true,
+		},
+		{
+			name:    "Missing TenantID",
+			user:    NewUser("1", "testuser", "test@example.com", "user", "token123", ""),
+			wantErr: true,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := tt.user.Validate()
-			if (err != nil) != tt.wantError {
-				t.Errorf("User.Validate() error = %v, wantError %v", err, tt.wantError)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("User.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
 	}
