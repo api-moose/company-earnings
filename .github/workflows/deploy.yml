@@ -41,6 +41,12 @@ jobs:
       with:
         project_id: ${{ secrets.GCP_PROJECT }}
 
+    - name: Grant Storage Object Viewer permission
+      run: |
+        gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT }} \
+          --member=serviceAccount:${{ secrets.GCP_SA_EMAIL }} \
+          --role=roles/storage.objectViewer
+
     - name: Deploy to Google App Engine
       run: |
         echo "${{ secrets.FIREBASE_CREDENTIALS_FILE }}" > /tmp/firebase_credentials.json
