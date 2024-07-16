@@ -42,23 +42,32 @@ func main() {
 	// Load Firebase credentials
 	credentialsJSON := os.Getenv("FIREBASE_CREDENTIALS_FILE")
 	if credentialsJSON == "" {
-		log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set")
+		log.Println("Warning: FIREBASE_CREDENTIALS_FILE environment variable is not set")
 	}
 
 	// Initialize Firebase app
-	opt := option.WithCredentialsJSON([]byte(credentialsJSON))
-	app, err := firebase.NewApp(context.Background(), nil, opt)
-	if err != nil {
-		log.Fatalf("Error initializing Firebase app: %v", err)
+	var app *firebase.App
+	var err error
+	if credentialsJSON != "" {
+		opt := option.WithCredentialsJSON([]byte(credentialsJSON))
+		app, err = firebase.NewApp(context.Background(), nil, opt)
+		if err != nil {
+			log.Printf("Error initializing Firebase app: %v", err)
+			// Continue without Firebase for now
+		}
 	}
 
-	// Get Firebase Auth client
-	authClient, err := app.Auth(context.Background())
-	if err != nil {
-		log.Fatalf("Error getting Firebase Auth client: %v", err)
+	var wrappedAuthClient *FirebaseAuthWrapper
+	if app != nil {
+		// Get Firebase Auth client
+		authClient, err := app.Auth(context.Background())
+		if err != nil {
+			log.Printf("Error getting Firebase Auth client: %v", err)
+			// Continue without Firebase Auth for now
+		} else {
+			wrappedAuthClient = &FirebaseAuthWrapper{client: authClient}
+		}
 	}
-
-	wrappedAuthClient := &FirebaseAuthWrapper{client: authClient}
 
 	// Set up router
 	r := setupRouter(wrappedAuthClient)
@@ -108,9 +117,14 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Use(middleware.RealIP)
 	r.Use(middleware.Logger)
 	r.Use(logging.LoggingMiddleware)
-	r.Use(tenancy.NewTenantMiddleware(authClient).Middleware)
-	r.Use(auth.NewAuthMiddleware(authClient).Middleware)
-	r.Use(access_control.RBACMiddleware)
+
+	if authClient != nil {
+		r.Use(tenancy.NewTenantMiddleware(authClient).Middleware)
+		r.Use(auth.NewAuthMiddleware(authClient).Middleware)
+		r.Use(access_control.RBACMiddleware)
+	} else {
+		log.Println("Warning: Running without authentication middleware")
+	}
 
 	r.Get("/", mainHandler)
 	r.Get("/health", healthCheckHandler)
