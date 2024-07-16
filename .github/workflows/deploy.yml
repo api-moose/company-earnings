@@ -41,18 +41,18 @@ jobs:
         docker push $DOCKER_IMAGE
 
     - name: Deploy to Cloud Run
-      env:
-        DOCKER_IMAGE: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
-      run: |
-        gcloud run deploy ${{ env.SERVICE_NAME }} \
-          --image $DOCKER_IMAGE \
-          --platform managed \
-          --region ${{ env.REGION }} \
-          --allow-unauthenticated \
-          --set-env-vars FIREBASE_CREDENTIALS='${{ secrets.FIREBASE_CREDENTIALS_FILE }}' \
-          --set-env-vars PORT=8080 \
-          --cpu=1 \
-          --memory=512Mi \
-          --max-instances=5 \
-          --min-instances=0 \
-          --concurrency=80
+  env:
+    DOCKER_IMAGE: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+  run: |
+    gcloud run deploy ${{ env.SERVICE_NAME }} \
+      --image $DOCKER_IMAGE \
+      --platform managed \
+      --region ${{ env.REGION }} \
+      --allow-unauthenticated \
+      --service-account github@financial-data-platform-427521.iam.gserviceaccount.com \
+      --set-env-vars FIREBASE_CREDENTIALS='${{ secrets.FIREBASE_CREDENTIALS_FILE }}' \
+      --cpu=1 \
+      --memory=512Mi \
+      --max-instances=5 \
+      --min-instances=0 \
+      --concurrency=80
