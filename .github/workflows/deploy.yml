@@ -3,7 +3,7 @@ name: Deploy to Google App Engine
 on:
   push:
     branches:
-      - main  # Set the branch to deploy from
+      - main
 
 jobs:
   deploy:
@@ -16,15 +16,19 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.22.4'  # Specify your Go version
+        go-version: '1.22.4'
 
     - name: Install dependencies
       run: go mod download
 
+    - name: Create .env file
+      run: |
+        echo "FIREBASE_CREDENTIALS_FILE=placeholder" > .env
+        echo "PORT=8080" >> .env
+
     - name: Run tests
       env:
         FIREBASE_CREDENTIALS_FILE: ${{ secrets.FIREBASE_CREDENTIALS_FILE }}
-        PORT: "8080"
       run: go test ./...
 
     - name: Set up Google Cloud SDK
