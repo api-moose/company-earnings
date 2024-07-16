@@ -81,7 +81,7 @@ func setupTestRouter() *chi.Mux {
 	r.Get("/version", versionHandler)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, notFoundMessage, http.StatusNotFound)
+		http.Error(w, "404 page not found", http.StatusNotFound)
 	})
 
 	return r
@@ -99,7 +99,7 @@ func TestSetupRouter(t *testing.T) {
 		{"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
 		{"Health check route", "/health", http.StatusOK, map[string]string{"status": "healthy"}},
 		{"Version route", "/version", http.StatusOK, map[string]string{"version": "0.1.0"}},
-		{"Nonexistent route", "/nonexistent", http.StatusNotFound, notFoundMessage + "\n"},
+		{"Nonexistent route", "/nonexistent", http.StatusNotFound, "404 page not found"},
 	}
 
 	for _, tc := range testCases {
@@ -116,7 +116,7 @@ func TestSetupRouter(t *testing.T) {
 			assert.Equal(t, tc.expectedStatus, rr.Code)
 
 			if _, ok := tc.expectedBody.(string); ok {
-				assert.Equal(t, tc.expectedBody, rr.Body.String())
+				assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
 			} else {
 				var actualBody map[string]string
 				err = json.Unmarshal(rr.Body.Bytes(), &actualBody)
@@ -254,7 +254,11 @@ func (f *FirebaseAuthWrapper) VerifyIDToken(ctx context.Context, idToken string)
 func main() {
 	credentialsFile := os.Getenv("FIREBASE_CREDENTIALS_FILE")
 	if credentialsFile == "" {
-		log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set")
+		// Fallback to local directory if environment variable is not set
+		credentialsFile = "serviceAccountKey.json"
+		if _, err := os.Stat(credentialsFile); os.IsNotExist(err) {
+			log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set and local credentials file is not found")
+		}
 	}
 
 	opt := option.WithCredentialsFile(credentialsFile)
@@ -323,10 +327,14 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Get("/version", versionHandler)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, notFoundMessage, http.StatusNotFound)
+		http.Error(w, "404 page not found", http.StatusNotFound)
 	})
 
 	return r
+}
+
+func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, notFoundMessage, http.StatusNotFound)
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
@@ -504,14 +512,6 @@ func TestNewFirebaseApp(t *testing.T) {
 	assert.NotNil(t, app)
 }
 \n
-File: ./internal/handlers/user/user_test.go
-\n
-File: ./internal/handlers/user/user.go
-\n
-File: ./internal/handlers/stock/stock.go
-\n
-File: ./internal/handlers/stock/stock_test.go
-\n
 File: ./internal/services/auth/auth_service_test.go
 package auth
 
@@ -664,14 +664,6 @@ func getTenantIDFromClaims(claims map[string]interface{}) string {
 	}
 	return "" // Empty string if not specified
 }
-\n
-File: ./internal/services/user/user_test.go
-\n
-File: ./internal/services/user/user.go
-\n
-File: ./internal/services/stock/stock.go
-\n
-File: ./internal/services/stock/stock_test.go
 \n
 File: ./internal/utils/utils_test.go
 package main
@@ -1237,68 +1229,61 @@ File: ./internal/middleware/access_control/access_control.go
 package access_control
 
 import (
-	"log"
-	"net/http"
+    "log"
+    "net/http"
 
-	"github.com/api-moose/company-earnings/internal/middleware/auth"
-	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
-	"github.com/go-chi/chi/v5"
+    "github.com/api-moose/company-earnings/internal/middleware/auth"
+    "github.com/api-moose/company-earnings/internal/middleware/tenancy"
 )
 
 func RBACMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		user, ok := auth.GetUserFromContext(r)
-		if !ok {
-			log.Println("RBACMiddleware: User not found in context")
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        user, ok := auth.GetUserFromContext(r)
+        if !ok {
+            log.Println("RBACMiddleware: User not found in context")
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+            return
+        }
 
-		tenantID, ok := tenancy.GetTenantID(r)
-		if !ok {
-			log.Println("RBACMiddleware: Tenant context not found")
-			http.Error(w, "Tenant context not found", http.StatusInternalServerError)
-			return
-		}
+        tenantID, ok := tenancy.GetTenantID(r)
+        if !ok {
+            log.Println("RBACMiddleware: Tenant context not found")
+            http.Error(w, "Tenant context not found", http.StatusInternalServerError)
+            return
+        }
 
-		if user.Role == "" {
-			log.Println("RBACMiddleware: Role not found in user record")
-			http.Error(w, "Unauthorized", http.StatusUnauthorized)
-			return
-		}
+        if user.Role == "" {
+            log.Println("RBACMiddleware: Role not found in user record")
+            http.Error(w, "Unauthorized", http.StatusUnauthorized)
+            return
+        }
 
-		if user.TenantID != tenantID {
-			log.Printf("RBACMiddleware: Tenant ID mismatch. User TenantID: %s, Request TenantID: %s", user.TenantID, tenantID)
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
-		}
+        if user.TenantID != tenantID {
+            log.Printf("RBACMiddleware: Tenant ID mismatch. User TenantID: %s, Request TenantID: %s", user.TenantID, tenantID)
+            http.Error(w, "Forbidden", http.StatusForbidden)
+            return
+        }
 
-		// Check if the route exists
-		rctx := chi.RouteContext(r.Context())
-		if rctx.RoutePattern() != "" {
-			// This is an existing route, apply RBAC
-			if !isAuthorized(user.Role, r.URL.Path) {
-				log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-		}
-		// If the route doesn't exist, let it pass through to be handled by NotFound
+        if !isAuthorized(user.Role, r.URL.Path) {
+            log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
+            http.Error(w, "Forbidden", http.StatusForbidden)
+            return
+        }
 
-		log.Printf("RBACMiddleware: Access granted. User ID: %s, Role: %s, Path: %s", user.ID, user.Role, r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
+        log.Printf("RBACMiddleware: Access granted. User ID: %s, Role: %s, Path: %s", user.ID, user.Role, r.URL.Path)
+        next.ServeHTTP(w, r)
+    })
 }
 
 func isAuthorized(role, path string) bool {
-	switch role {
-	case "admin":
-		return true // Admins have access to all routes
-	case "user":
-		return path == "/" || path == "/user" || path == "/health" || path == "/version" // Users have access to these routes
-	default:
-		return false // Unknown roles have no access
-	}
+    switch role {
+    case "admin":
+        return true // Admins have access to all routes
+    case "user":
+        return path == "/" || path == "/user" || path == "/health" || path == "/version" // Users have access to these routes
+    default:
+        return false // Unknown roles have no access
+    }
 }
 \n
 File: ./internal/middleware/access_control/access_control_test.go
@@ -1325,62 +1310,14 @@ func TestRBACMiddleware(t *testing.T) {
 		tenantID       string
 		expectedStatus int
 	}{
-		{
-			name:           "Admin access to admin route",
-			user:           models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"),
-			path:           "/admin",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "Admin access to user route",
-			user:           models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"),
-			path:           "/user",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "User access to user route",
-			user:           models.NewUser("2", "user", "user@example.com", "user", "tenant1"),
-			path:           "/user",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusOK,
-		},
-		{
-			name:           "User access to admin route",
-			user:           models.NewUser("2", "user", "user@example.com", "user", "tenant1"),
-			path:           "/admin",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusForbidden,
-		},
-		{
-			name:           "No role",
-			user:           models.NewUser("3", "norole", "norole@example.com", "", "tenant1"),
-			path:           "/user",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusUnauthorized,
-		},
-		{
-			name:           "Invalid role",
-			user:           models.NewUser("4", "invalid", "invalid@example.com", "invalid", "tenant1"),
-			path:           "/user",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusForbidden,
-		},
-		{
-			name:           "Cross-tenant access attempt",
-			user:           models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"),
-			path:           "/admin",
-			tenantID:       "tenant2",
-			expectedStatus: http.StatusForbidden,
-		},
-		{
-			name:           "Non-existent route",
-			user:           models.NewUser("2", "user", "user@example.com", "user", "tenant1"),
-			path:           "/nonexistent",
-			tenantID:       "tenant1",
-			expectedStatus: http.StatusForbidden,
-		},
+		{"Admin access to admin route", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant1", http.StatusOK},
+		{"Admin access to user route", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/user", "tenant1", http.StatusOK},
+		{"User access to user route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/user", "tenant1", http.StatusOK},
+		{"User access to admin route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/admin", "tenant1", http.StatusForbidden},
+		{"No role", models.NewUser("3", "norole", "norole@example.com", "", "tenant1"), "/user", "tenant1", http.StatusUnauthorized},
+		{"Invalid role", models.NewUser("4", "invalid", "invalid@example.com", "invalid", "tenant1"), "/user", "tenant1", http.StatusForbidden},
+		{"Cross-tenant access attempt", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant2", http.StatusForbidden},
+		{"Non-existent route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/nonexistent", "tenant1", http.StatusNotFound},
 	}
 
 	for _, tt := range tests {
@@ -1389,6 +1326,12 @@ func TestRBACMiddleware(t *testing.T) {
 			r.Use(RBACMiddleware)
 			r.Get("/admin", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
 			r.Get("/user", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+			r.Get("/", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+			r.Get("/health", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+			r.Get("/version", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+			r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+				http.Error(w, "404 page not found", http.StatusNotFound)
+			})
 
 			req, err := http.NewRequest("GET", tt.path, nil)
 			assert.NoError(t, err)

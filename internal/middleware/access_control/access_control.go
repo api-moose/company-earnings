@@ -6,11 +6,16 @@ import (
 
 	"github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
-	"github.com/go-chi/chi/v5"
 )
 
 func RBACMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if the route exists
+		if !routeExists(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		user, ok := auth.GetUserFromContext(r)
 		if !ok {
 			log.Println("RBACMiddleware: User not found in context")
@@ -37,17 +42,11 @@ func RBACMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		// Check if the route exists
-		rctx := chi.RouteContext(r.Context())
-		if rctx.RoutePattern() != "" {
-			// This is an existing route, apply RBAC
-			if !isAuthorized(user.Role, r.URL.Path) {
-				log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
+		if !isAuthorized(user.Role, r.URL.Path) {
+			log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
 		}
-		// If the route doesn't exist, let it pass through to be handled by NotFound
 
 		log.Printf("RBACMiddleware: Access granted. User ID: %s, Role: %s, Path: %s", user.ID, user.Role, r.URL.Path)
 		next.ServeHTTP(w, r)
@@ -59,8 +58,18 @@ func isAuthorized(role, path string) bool {
 	case "admin":
 		return true // Admins have access to all routes
 	case "user":
-		return path == "/" || path == "/user" || path == "/health" || path == "/version" // Users have access to these routes
+		return path == "/" || path == "/user" || path == "/health" || path == "/version"
 	default:
 		return false // Unknown roles have no access
 	}
+}
+
+func routeExists(path string) bool {
+	knownRoutes := []string{"/", "/admin", "/user", "/health", "/version"}
+	for _, route := range knownRoutes {
+		if path == route {
+			return true
+		}
+	}
+	return false
 }

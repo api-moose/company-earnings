@@ -109,10 +109,14 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Get("/version", versionHandler)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, notFoundMessage, http.StatusNotFound)
+		http.Error(w, "404 page not found", http.StatusNotFound)
 	})
 
 	return r
+}
+
+func notFoundHandler(w http.ResponseWriter, r *http.Request) {
+	http.Error(w, notFoundMessage, http.StatusNotFound)
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {

@@ -80,7 +80,7 @@ func setupTestRouter() *chi.Mux {
 	r.Get("/version", versionHandler)
 
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, notFoundMessage, http.StatusNotFound)
+		http.Error(w, "404 page not found", http.StatusNotFound)
 	})
 
 	return r
@@ -98,7 +98,7 @@ func TestSetupRouter(t *testing.T) {
 		{"Main route", "/", http.StatusOK, "Welcome to the Financial Data Platform API"},
 		{"Health check route", "/health", http.StatusOK, map[string]string{"status": "healthy"}},
 		{"Version route", "/version", http.StatusOK, map[string]string{"version": "0.1.0"}},
-		{"Nonexistent route", "/nonexistent", http.StatusNotFound, notFoundMessage + "\n"},
+		{"Nonexistent route", "/nonexistent", http.StatusNotFound, "404 page not found"},
 	}
 
 	for _, tc := range testCases {
@@ -115,7 +115,7 @@ func TestSetupRouter(t *testing.T) {
 			assert.Equal(t, tc.expectedStatus, rr.Code)
 
 			if _, ok := tc.expectedBody.(string); ok {
-				assert.Equal(t, tc.expectedBody, rr.Body.String())
+				assert.Equal(t, tc.expectedBody, strings.TrimSpace(rr.Body.String()))
 			} else {
 				var actualBody map[string]string
 				err = json.Unmarshal(rr.Body.Bytes(), &actualBody)
