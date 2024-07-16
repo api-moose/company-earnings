@@ -252,16 +252,12 @@ func (f *FirebaseAuthWrapper) VerifyIDToken(ctx context.Context, idToken string)
 }
 
 func main() {
-	credentialsFile := os.Getenv("FIREBASE_CREDENTIALS_FILE")
-	if credentialsFile == "" {
-		// Fallback to local directory if environment variable is not set
-		credentialsFile = "serviceAccountKey.json"
-		if _, err := os.Stat(credentialsFile); os.IsNotExist(err) {
-			log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set and local credentials file is not found")
-		}
+	credentialsJSON := os.Getenv("FIREBASE_CREDENTIALS_FILE")
+	if credentialsJSON == "" {
+		log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set")
 	}
 
-	opt := option.WithCredentialsFile(credentialsFile)
+	opt := option.WithCredentialsJSON([]byte(credentialsJSON))
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {
 		log.Fatalf("error initializing app: %v", err)
@@ -1229,61 +1225,77 @@ File: ./internal/middleware/access_control/access_control.go
 package access_control
 
 import (
-    "log"
-    "net/http"
+	"log"
+	"net/http"
 
-    "github.com/api-moose/company-earnings/internal/middleware/auth"
-    "github.com/api-moose/company-earnings/internal/middleware/tenancy"
+	"github.com/api-moose/company-earnings/internal/middleware/auth"
+	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
 )
 
 func RBACMiddleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        user, ok := auth.GetUserFromContext(r)
-        if !ok {
-            log.Println("RBACMiddleware: User not found in context")
-            http.Error(w, "Unauthorized", http.StatusUnauthorized)
-            return
-        }
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Check if the route exists
+		if !routeExists(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 
-        tenantID, ok := tenancy.GetTenantID(r)
-        if !ok {
-            log.Println("RBACMiddleware: Tenant context not found")
-            http.Error(w, "Tenant context not found", http.StatusInternalServerError)
-            return
-        }
+		user, ok := auth.GetUserFromContext(r)
+		if !ok {
+			log.Println("RBACMiddleware: User not found in context")
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-        if user.Role == "" {
-            log.Println("RBACMiddleware: Role not found in user record")
-            http.Error(w, "Unauthorized", http.StatusUnauthorized)
-            return
-        }
+		tenantID, ok := tenancy.GetTenantID(r)
+		if !ok {
+			log.Println("RBACMiddleware: Tenant context not found")
+			http.Error(w, "Tenant context not found", http.StatusInternalServerError)
+			return
+		}
 
-        if user.TenantID != tenantID {
-            log.Printf("RBACMiddleware: Tenant ID mismatch. User TenantID: %s, Request TenantID: %s", user.TenantID, tenantID)
-            http.Error(w, "Forbidden", http.StatusForbidden)
-            return
-        }
+		if user.Role == "" {
+			log.Println("RBACMiddleware: Role not found in user record")
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
 
-        if !isAuthorized(user.Role, r.URL.Path) {
-            log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
-            http.Error(w, "Forbidden", http.StatusForbidden)
-            return
-        }
+		if user.TenantID != tenantID {
+			log.Printf("RBACMiddleware: Tenant ID mismatch. User TenantID: %s, Request TenantID: %s", user.TenantID, tenantID)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
 
-        log.Printf("RBACMiddleware: Access granted. User ID: %s, Role: %s, Path: %s", user.ID, user.Role, r.URL.Path)
-        next.ServeHTTP(w, r)
-    })
+		if !isAuthorized(user.Role, r.URL.Path) {
+			log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
+			http.Error(w, "Forbidden", http.StatusForbidden)
+			return
+		}
+
+		log.Printf("RBACMiddleware: Access granted. User ID: %s, Role: %s, Path: %s", user.ID, user.Role, r.URL.Path)
+		next.ServeHTTP(w, r)
+	})
 }
 
 func isAuthorized(role, path string) bool {
-    switch role {
-    case "admin":
-        return true // Admins have access to all routes
-    case "user":
-        return path == "/" || path == "/user" || path == "/health" || path == "/version" // Users have access to these routes
-    default:
-        return false // Unknown roles have no access
-    }
+	switch role {
+	case "admin":
+		return true // Admins have access to all routes
+	case "user":
+		return path == "/" || path == "/user" || path == "/health" || path == "/version"
+	default:
+		return false // Unknown roles have no access
+	}
+}
+
+func routeExists(path string) bool {
+	knownRoutes := []string{"/", "/admin", "/user", "/health", "/version"}
+	for _, route := range knownRoutes {
+		if path == route {
+			return true
+		}
+	}
+	return false
 }
 \n
 File: ./internal/middleware/access_control/access_control_test.go
@@ -1318,6 +1330,9 @@ func TestRBACMiddleware(t *testing.T) {
 		{"Invalid role", models.NewUser("4", "invalid", "invalid@example.com", "invalid", "tenant1"), "/user", "tenant1", http.StatusForbidden},
 		{"Cross-tenant access attempt", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant2", http.StatusForbidden},
 		{"Non-existent route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/nonexistent", "tenant1", http.StatusNotFound},
+		{"User access to root route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/", "tenant1", http.StatusOK},
+		{"User access to health route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/health", "tenant1", http.StatusOK},
+		{"User access to version route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/version", "tenant1", http.StatusOK},
 	}
 
 	for _, tt := range tests {
@@ -1344,6 +1359,64 @@ func TestRBACMiddleware(t *testing.T) {
 			r.ServeHTTP(rr, req)
 
 			assert.Equal(t, tt.expectedStatus, rr.Code)
+		})
+	}
+}
+
+func TestIsAuthorized(t *testing.T) {
+	tests := []struct {
+		name     string
+		role     string
+		path     string
+		expected bool
+	}{
+		{"Admin access to admin route", "admin", "/admin", true},
+		{"Admin access to user route", "admin", "/user", true},
+		{"Admin access to root route", "admin", "/", true},
+		{"Admin access to health route", "admin", "/health", true},
+		{"Admin access to version route", "admin", "/version", true},
+		{"Admin access to non-existent route", "admin", "/nonexistent", true},
+		{"User access to user route", "user", "/user", true},
+		{"User access to root route", "user", "/", true},
+		{"User access to health route", "user", "/health", true},
+		{"User access to version route", "user", "/version", true},
+		{"User access to admin route", "user", "/admin", false},
+		{"User access to non-existent route", "user", "/nonexistent", false},
+		{"Invalid role access to user route", "invalid", "/user", false},
+		{"Invalid role access to admin route", "invalid", "/admin", false},
+		{"Invalid role access to root route", "invalid", "/", false},
+		{"Invalid role access to health route", "invalid", "/health", false},
+		{"Invalid role access to version route", "invalid", "/version", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := isAuthorized(tt.role, tt.path)
+			assert.Equal(t, tt.expected, result)
+		})
+	}
+}
+
+func TestRouteExists(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		expected bool
+	}{
+		{"Root route", "/", true},
+		{"Admin route", "/admin", true},
+		{"User route", "/user", true},
+		{"Health route", "/health", true},
+		{"Version route", "/version", true},
+		{"Non-existent route", "/nonexistent", false},
+		{"Partial match route", "/admi", false},
+		{"Case-sensitive route", "/ADMIN", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := routeExists(tt.path)
+			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

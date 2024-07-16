@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -34,58 +35,69 @@ func (f *FirebaseAuthWrapper) VerifyIDToken(ctx context.Context, idToken string)
 }
 
 func main() {
+	// Set up logging
+	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.Println("Starting Financial Data Platform API")
+
+	// Load Firebase credentials
 	credentialsJSON := os.Getenv("FIREBASE_CREDENTIALS_FILE")
 	if credentialsJSON == "" {
 		log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set")
 	}
 
+	// Initialize Firebase app
 	opt := option.WithCredentialsJSON([]byte(credentialsJSON))
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {
-		log.Fatalf("error initializing app: %v", err)
+		log.Fatalf("Error initializing Firebase app: %v", err)
 	}
 
+	// Get Firebase Auth client
 	authClient, err := app.Auth(context.Background())
 	if err != nil {
-		log.Fatalf("error getting Auth client: %v", err)
+		log.Fatalf("Error getting Firebase Auth client: %v", err)
 	}
 
 	wrappedAuthClient := &FirebaseAuthWrapper{client: authClient}
 
+	// Set up router
 	r := setupRouter(wrappedAuthClient)
 
+	// Get port from environment variable
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
+		log.Println("PORT not set, using default port 8080")
 	}
 
+	// Create server
 	server := &http.Server{
 		Addr:    ":" + port,
 		Handler: r,
 	}
 
+	// Start server
 	go func() {
-		log.Printf("Starting server on :%s", port)
+		log.Printf("Server listening on port %s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
-
-	<-stop
-
+	// Wait for interrupt signal to gracefully shut down the server
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, os.Interrupt, syscall.SIGTERM)
+	<-quit
 	log.Println("Shutting down server...")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		log.Fatalf("Server shutdown error: %v", err)
+		log.Fatalf("Server forced to shutdown: %v", err)
 	}
 
-	log.Println("Server stopped gracefully")
+	log.Println("Server exiting")
 }
 
 func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
@@ -104,9 +116,7 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Get("/health", healthCheckHandler)
 	r.Get("/version", versionHandler)
 
-	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "404 page not found", http.StatusNotFound)
-	})
+	r.NotFound(notFoundHandler)
 
 	return r
 }
@@ -116,19 +126,23 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
-	w.Write([]byte("Welcome to the Financial Data Platform API"))
+	fmt.Fprint(w, "Welcome to the Financial Data Platform API")
 }
 
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]string{"status": "healthy"}
-	jsonResponse, _ := json.Marshal(response)
-	w.Write(jsonResponse)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding health check response: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
 }
 
 func versionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	response := map[string]string{"version": version}
-	jsonResponse, _ := json.Marshal(response)
-	w.Write(jsonResponse)
+	if err := json.NewEncoder(w).Encode(response); err != nil {
+		log.Printf("Error encoding version response: %v", err)
+		http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+	}
 }
