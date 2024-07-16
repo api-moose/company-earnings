@@ -31,7 +31,7 @@ jobs:
         FIREBASE_CREDENTIALS_FILE: ${{ secrets.FIREBASE_CREDENTIALS_FILE }}
       run: go test ./...
 
-    - name: Authenticate to Google Cloud (App Engine)
+    - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
@@ -40,14 +40,6 @@ jobs:
       uses: google-github-actions/setup-gcloud@v1
       with:
         project_id: ${{ secrets.GCP_PROJECT }}
-
-    - name: Grant Storage Object Viewer permission
-      run: |
-        gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT }} \
-          --member=serviceAccount:github@financial-data-platform-427521.iam.gserviceaccount.com \
-          --role=roles/storage.objectViewer
-      env:
-        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
 
     - name: Deploy to Google App Engine
       run: |
