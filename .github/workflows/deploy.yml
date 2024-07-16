@@ -15,6 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     environment: cloud-run
 
+    permissions:
+      contents: 'read'
+      id-token: 'write'
+
     steps:
     - name: Checkout repository
       uses: actions/checkout@v3
@@ -22,18 +26,16 @@ jobs:
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v1
       with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
+        workload_identity_provider: 'projects/123456789/locations/global/workloadIdentityPools/my-pool/providers/my-provider'
+        service_account: 'my-service-account@my-project.iam.gserviceaccount.com'
 
     - name: Set up Cloud SDK
-      uses: google-github-actions/setup-gcloud@v1
-      with:
-        version: 'latest'
+      uses: google-github-actions/setup-gcloud@v2
 
     - name: Build and push Docker image
       env:
         DOCKER_IMAGE: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
       run: |
-        echo "${{ secrets.FIREBASE_CREDENTIALS_FILE }}" > /tmp/firebase_credentials.json
         gcloud builds submit --tag $DOCKER_IMAGE
 
     - name: Deploy to Cloud Run
@@ -45,7 +47,7 @@ jobs:
           --platform managed \
           --region ${{ env.REGION }} \
           --allow-unauthenticated \
-          --set-env-vars FIREBASE_CREDENTIALS_FILE=/tmp/firebase_credentials.json \
+          --set-env-vars FIREBASE_CREDENTIALS='${{ secrets.FIREBASE_CREDENTIALS_FILE }}' \
           --set-env-vars PORT=8080 \
           --cpu=1 \
           --memory=512Mi \
