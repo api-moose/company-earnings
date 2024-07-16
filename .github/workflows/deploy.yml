@@ -1,49 +1,54 @@
-name: Deploy to Google App Engine
+name: Deploy to Google Cloud Run
 
 on:
   push:
     branches:
       - main
 
+env:
+  PROJECT_ID: financial-data-platform-427521
+  SERVICE_NAME: company-earnings-api
+  REGION: us-central1
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    environment: app-engine
+    environment: cloud-run
 
     steps:
-    - uses: actions/checkout@v3
-
-    - name: Set up Go
-      uses: actions/setup-go@v4
-      with:
-        go-version: '1.22.4'
-
-    - name: Install dependencies
-      run: go mod download
-
-    - name: Create .env file
-      run: |
-        echo "FIREBASE_CREDENTIALS_FILE=placeholder" > .env
-        echo "PORT=8080" >> .env
-
-    - name: Run tests
-      env:
-        FIREBASE_CREDENTIALS_FILE: ${{ secrets.FIREBASE_CREDENTIALS_FILE }}
-      run: go test ./...
+    - name: Checkout repository
+      uses: actions/checkout@v3
 
     - name: Authenticate to Google Cloud
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    - name: Set up Google Cloud SDK
+    - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
       with:
-        project_id: ${{ secrets.GCP_PROJECT }}
+        version: 'latest'
 
-    - name: Deploy to Google App Engine
+    - name: Build and push Docker image
+      env:
+        DOCKER_IMAGE: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
       run: |
         echo "${{ secrets.FIREBASE_CREDENTIALS_FILE }}" > /tmp/firebase_credentials.json
-        gcloud app deploy app.yaml --quiet
+        gcloud builds submit --tag $DOCKER_IMAGE
+
+    - name: Deploy to Cloud Run
       env:
-        FIREBASE_CREDENTIALS_FILE: /tmp/firebase_credentials.json
+        DOCKER_IMAGE: gcr.io/${{ env.PROJECT_ID }}/${{ env.SERVICE_NAME }}:${{ github.sha }}
+      run: |
+        gcloud run deploy ${{ env.SERVICE_NAME }} \
+          --image $DOCKER_IMAGE \
+          --platform managed \
+          --region ${{ env.REGION }} \
+          --allow-unauthenticated \
+          --set-env-vars FIREBASE_CREDENTIALS_FILE=/tmp/firebase_credentials.json \
+          --set-env-vars PORT=8080 \
+          --cpu=1 \
+          --memory=512Mi \
+          --max-instances=5 \
+          --min-instances=0 \
+          --concurrency=80
