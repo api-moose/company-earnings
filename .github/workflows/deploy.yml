@@ -8,6 +8,7 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    environment: app-engine
 
     steps:
     - uses: actions/checkout@v3
@@ -20,7 +21,7 @@ jobs:
     - name: Install dependencies
       run: go mod download
 
-     - name: Configure Firebase credentials
+    - name: Configure Firebase credentials
       run: |
         echo "${{ secrets.FIREBASE_CREDENTIALS_FILE }}" > $HOME/firebase-credentials.json
         echo "FIREBASE_CREDENTIALS_FILE=$HOME/firebase-credentials.json" >> $GITHUB_ENV
@@ -39,7 +40,7 @@ jobs:
         service_account_key: ${{ secrets.GCP_SA_KEY }}
         export_default_credentials: true
 
-        - name: Deploy to Google App Engine
+    - name: Deploy to Google App Engine
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GOOGLE_APPLICATION_CREDENTIALS }}
+        GOOGLE_APPLICATION_CREDENTIALS: ${{ env.FIREBASE_CREDENTIALS_FILE }}
       run: gcloud app deploy
