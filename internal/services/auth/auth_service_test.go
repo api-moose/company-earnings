@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"firebase.google.com/go/v4/auth"
-	"github.com/api-moose/company-earnings/internal/db/models"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -58,12 +58,12 @@ func TestAuthService_AuthenticateUser(t *testing.T) {
 		name         string
 		token        string
 		expectedErr  error
-		expectedUser *models.User
+		expectedUser *mongo.User
 	}{
 		{
 			name:  "Valid token",
 			token: "valid_token",
-			expectedUser: &models.User{
+			expectedUser: &mongo.User{
 				ID:       "valid_user",
 				Username: "Test User",
 				Email:    "test@example.com",

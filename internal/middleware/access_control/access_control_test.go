@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/api-moose/company-earnings/internal/db/models"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 	"github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
 	"github.com/go-chi/chi/v5"
@@ -16,22 +16,22 @@ import (
 func TestRBACMiddleware(t *testing.T) {
 	tests := []struct {
 		name           string
-		user           *models.User
+		user           *mongo.User
 		path           string
 		tenantID       string
 		expectedStatus int
 	}{
-		{"Admin access to admin route", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant1", http.StatusOK},
-		{"Admin access to user route", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/user", "tenant1", http.StatusOK},
-		{"User access to user route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/user", "tenant1", http.StatusOK},
-		{"User access to admin route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/admin", "tenant1", http.StatusForbidden},
-		{"No role", models.NewUser("3", "norole", "norole@example.com", "", "tenant1"), "/user", "tenant1", http.StatusUnauthorized},
-		{"Invalid role", models.NewUser("4", "invalid", "invalid@example.com", "invalid", "tenant1"), "/user", "tenant1", http.StatusForbidden},
-		{"Cross-tenant access attempt", models.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant2", http.StatusForbidden},
-		{"Non-existent route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/nonexistent", "tenant1", http.StatusNotFound},
-		{"User access to root route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/", "tenant1", http.StatusOK},
-		{"User access to health route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/health", "tenant1", http.StatusOK},
-		{"User access to version route", models.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/version", "tenant1", http.StatusOK},
+		{"Admin access to admin route", mongo.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant1", http.StatusOK},
+		{"Admin access to user route", mongo.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/user", "tenant1", http.StatusOK},
+		{"User access to user route", mongo.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/user", "tenant1", http.StatusOK},
+		{"User access to admin route", mongo.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/admin", "tenant1", http.StatusForbidden},
+		{"No role", mongo.NewUser("3", "norole", "norole@example.com", "", "tenant1"), "/user", "tenant1", http.StatusUnauthorized},
+		{"Invalid role", mongo.NewUser("4", "invalid", "invalid@example.com", "invalid", "tenant1"), "/user", "tenant1", http.StatusForbidden},
+		{"Cross-tenant access attempt", mongo.NewUser("1", "admin", "admin@example.com", "admin", "tenant1"), "/admin", "tenant2", http.StatusForbidden},
+		{"Non-existent route", mongo.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/nonexistent", "tenant1", http.StatusNotFound},
+		{"User access to root route", mongo.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/", "tenant1", http.StatusOK},
+		{"User access to health route", mongo.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/health", "tenant1", http.StatusOK},
+		{"User access to version route", mongo.NewUser("2", "user", "user@example.com", "user", "tenant1"), "/version", "tenant1", http.StatusOK},
 	}
 
 	for _, tt := range tests {

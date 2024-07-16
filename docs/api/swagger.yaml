@@ -1,0 +1,180 @@
+openapi: 3.0.3
+info:
+  title: Company Search API
+  description: |
+    An API to search for company information by various parameters.
+    This API provides detailed information about companies, including their symbols, CIK identifiers, security types, and more.
+  version: 1.1.0
+  contact:
+    name: API Support
+    email: owner@company-earnings.com
+    url: https://www.company-earnings.com/support
+
+servers:
+  - url: https://api.company-earnings.com/v1
+    description: Production server
+
+tags:
+  - name: companies
+    description: Operations related to company information
+
+paths:
+  /companies:
+    get:
+      summary: Search for companies
+      description: Retrieve company information based on search criteria.
+      operationId: searchCompanies
+      tags:
+        - companies
+      parameters:
+        - name: query
+          in: query
+          required: true
+          description: Search parameter, could be part of the company name or ticker symbol.
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 100
+        - name: limit
+          in: query
+          description: Limit the number of results returned.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 10
+        - name: exchange
+          in: query
+          description: Filter companies by their primary exchange.
+          schema:
+            type: string
+            enum: [NYSE, NASDAQ, AMEX]
+        - name: active
+          in: query
+          description: Filter companies based on active trading status.
+          schema:
+            type: boolean
+        - name: mode
+          in: query
+          description: Change search mode.
+          schema:
+            type: string
+            enum: [exact, starts_with, contains]
+            default: contains
+      responses:
+        '200':
+          description: Successful response with an array of companies matching the query.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CompanySearchResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+      security:
+        - ApiKeyAuth: []
+
+components:
+  schemas:
+    CompanySearchResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          description: The total number of results for this request.
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Company'
+        next_url:
+          type: string
+          nullable: true
+          description: URL to the next page of results.
+    Company:
+      type: object
+      required:
+        - symbol
+        - cik
+        - securityName
+        - securityType
+        - region
+        - exchange
+      properties:
+        symbol:
+          type: string
+          description: Symbol of the company in Nasdaq Integrated symbology.
+          example: AAPL
+        cik:
+          type: string
+          description: Unique CIK identifier for the company.
+          example: "0000320193"
+        securityName:
+          type: string
+          description: Name of the security.
+          example: Apple Inc.
+        securityType:
+          type: string
+          description: Type of the security.
+          enum: [Common Stock, ETF, ADR, REIT]
+        region:
+          type: string
+          description: Country code for the symbol using ISO 3166-1 alpha-2.
+          example: US
+        exchange:
+          type: string
+          description: Supported exchange the security is listed on.
+          enum: [NYSE, NASDAQ, AMEX]
+        sector:
+          type: string
+          description: Sector the security belongs to.
+          example: Technology
+    Error:
+      type: object
+      properties:
+        code:
+          type: integer
+        message:
+          type: string
+  responses:
+    BadRequest:
+      description: Bad request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: Too many requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalServerError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key

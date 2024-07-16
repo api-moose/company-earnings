@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"firebase.google.com/go/v4/auth"
-	"github.com/api-moose/company-earnings/internal/db/models"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 )
 
 type ContextKey string
@@ -57,7 +57,7 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		user := &models.User{
+		user := &mongo.User{
 			ID: decodedToken.UID,
 		}
 
@@ -77,8 +77,8 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-func GetUserFromContext(r *http.Request) (*models.User, bool) {
-	user, ok := r.Context().Value(UserContextKey).(*models.User)
+func GetUserFromContext(r *http.Request) (*mongo.User, bool) {
+	user, ok := r.Context().Value(UserContextKey).(*mongo.User)
 	if !ok {
 		log.Println("GetUserFromContext: User not found in context")
 	} else {

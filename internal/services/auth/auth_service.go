@@ -4,7 +4,7 @@ import (
 	"context"
 
 	"firebase.google.com/go/v4/auth"
-	"github.com/api-moose/company-earnings/internal/db/models"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 )
 
 type FirebaseAuthClient interface {
@@ -20,7 +20,7 @@ func NewAuthService(client FirebaseAuthClient) *AuthService {
 	return &AuthService{client: client}
 }
 
-func (s *AuthService) AuthenticateUser(ctx context.Context, token string) (*models.User, error) {
+func (s *AuthService) AuthenticateUser(ctx context.Context, token string) (*mongo.User, error) {
 	decodedToken, err := s.client.VerifyIDToken(ctx, token)
 	if err != nil {
 		return nil, err
@@ -31,7 +31,7 @@ func (s *AuthService) AuthenticateUser(ctx context.Context, token string) (*mode
 		return nil, err
 	}
 
-	user := &models.User{
+	user := &mongo.User{
 		ID:       firebaseUser.UID,
 		Username: firebaseUser.DisplayName,
 		Email:    firebaseUser.Email,
