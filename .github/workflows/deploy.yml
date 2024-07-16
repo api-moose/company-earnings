@@ -44,7 +44,7 @@ jobs:
     - name: Grant Storage Object Viewer permission
       run: |
         gcloud projects add-iam-policy-binding ${{ secrets.GCP_PROJECT }} \
-          --member=serviceAccount:app-engine-deployer@company-earnings.iam.gserviceaccount.com \
+          --member=serviceAccount:github@financial-data-platform-427521.iam.gserviceaccount.com \
           --role=roles/storage.objectViewer
       env:
         GOOGLE_APPLICATION_CREDENTIALS: ${{ secrets.GCP_SA_KEY }}
