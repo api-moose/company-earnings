@@ -6,7 +6,7 @@ on:
       - main  # Set the branch to deploy from
 
 jobs:
-  build:
+  deploy:
     runs-on: ubuntu-latest
     environment: app-engine
 
@@ -16,20 +16,16 @@ jobs:
     - name: Set up Go
       uses: actions/setup-go@v4
       with:
-        go-version: '1.22.4'  # Your specified Go version
+        go-version: '1.22.4'  # Specify your Go version
 
     - name: Install dependencies
       run: go mod download
 
-    - name: Configure Firebase credentials
-      run: |
-        echo "${{ secrets.FIREBASE_CREDENTIALS_FILE }}" > $HOME/firebase-credentials.json
-        echo "FIREBASE_CREDENTIALS_FILE=$HOME/firebase-credentials.json" >> $GITHUB_ENV
-
     - name: Run tests
-  env:
-    FIREBASE_CREDENTIALS_FILE: ${{ secrets.FIREBASE_CREDENTIALS_FILE }}
-  run: go test ./...
+      env:
+        FIREBASE_CREDENTIALS_FILE: ${{ secrets.FIREBASE_CREDENTIALS_FILE }}
+        PORT: "8080"
+      run: go test ./...
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
@@ -39,6 +35,8 @@ jobs:
         export_default_credentials: true
 
     - name: Deploy to Google App Engine
+      run: |
+        echo "${{ secrets.FIREBASE_CREDENTIALS_FILE }}" > /tmp/firebase_credentials.json
+        gcloud app deploy app.yaml --quiet
       env:
-        GOOGLE_APPLICATION_CREDENTIALS: ${{ env.FIREBASE_CREDENTIALS_FILE }}
-      run: gcloud app deploy
+        FIREBASE_CREDENTIALS_FILE: /tmp/firebase_credentials.json
