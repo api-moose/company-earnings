@@ -23,6 +23,9 @@ jobs:
       uses: google-github-actions/auth@v1
       with:
         credentials_json: ${{ secrets.GCP_SA_KEY }}
+        project_id: financial-data-platform-427521
+        service_account: github@financial-data-platform-427521.iam.gserviceaccount.com
+
 
     - name: Set up Cloud SDK
       uses: google-github-actions/setup-gcloud@v1
