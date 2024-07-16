@@ -6,6 +6,7 @@ import (
 
 	"github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
+	"github.com/go-chi/chi/v5"
 )
 
 func RBACMiddleware(next http.Handler) http.Handler {
@@ -31,17 +32,24 @@ func RBACMiddleware(next http.Handler) http.Handler {
 		}
 
 		if user.TenantID != tenantID {
-			log.Println("RBACMiddleware: Tenant ID mismatch")
+			log.Printf("RBACMiddleware: Tenant ID mismatch. User TenantID: %s, Request TenantID: %s", user.TenantID, tenantID)
 			http.Error(w, "Forbidden", http.StatusForbidden)
 			return
 		}
 
-		if !isAuthorized(user.Role, r.URL.Path) {
-			log.Println("RBACMiddleware: User not authorized")
-			http.Error(w, "Forbidden", http.StatusForbidden)
-			return
+		// Check if the route exists
+		rctx := chi.RouteContext(r.Context())
+		if rctx.RoutePattern() != "" {
+			// This is an existing route, apply RBAC
+			if !isAuthorized(user.Role, r.URL.Path) {
+				log.Printf("RBACMiddleware: User not authorized. Role: %s, Path: %s", user.Role, r.URL.Path)
+				http.Error(w, "Forbidden", http.StatusForbidden)
+				return
+			}
 		}
+		// If the route doesn't exist, let it pass through to be handled by NotFound
 
+		log.Printf("RBACMiddleware: Access granted. User ID: %s, Role: %s, Path: %s", user.ID, user.Role, r.URL.Path)
 		next.ServeHTTP(w, r)
 	})
 }
@@ -51,7 +59,7 @@ func isAuthorized(role, path string) bool {
 	case "admin":
 		return true // Admins have access to all routes
 	case "user":
-		return path == "/user" // Users only have access to the /user route
+		return path == "/" || path == "/user" || path == "/health" || path == "/version" // Users have access to these routes
 	default:
 		return false // Unknown roles have no access
 	}

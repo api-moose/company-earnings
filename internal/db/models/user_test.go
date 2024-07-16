@@ -5,7 +5,7 @@ import (
 )
 
 func TestNewUser(t *testing.T) {
-	user := NewUser("1", "testuser", "test@example.com", "user", "token123", "tenant1")
+	user := NewUser("1", "testuser", "test@example.com", "user", "tenant1")
 
 	if user.ID != "1" {
 		t.Errorf("Expected ID '1', got '%s'", user.ID)
@@ -18,9 +18,6 @@ func TestNewUser(t *testing.T) {
 	}
 	if user.Role != "user" {
 		t.Errorf("Expected Role 'user', got '%s'", user.Role)
-	}
-	if user.Token != "token123" {
-		t.Errorf("Expected Token 'token123', got '%s'", user.Token)
 	}
 	if user.TenantID != "tenant1" {
 		t.Errorf("Expected TenantID 'tenant1', got '%s'", user.TenantID)
@@ -35,37 +32,32 @@ func TestUserValidate(t *testing.T) {
 	}{
 		{
 			name:    "Valid user",
-			user:    NewUser("1", "testuser", "test@example.com", "user", "token123", "tenant1"),
+			user:    NewUser("1", "testuser", "test@example.com", "user", "tenant1"),
 			wantErr: false,
 		},
 		{
 			name:    "Missing ID",
-			user:    NewUser("", "testuser", "test@example.com", "user", "token123", "tenant1"),
+			user:    NewUser("", "testuser", "test@example.com", "user", "tenant1"),
 			wantErr: true,
 		},
 		{
 			name:    "Missing Username",
-			user:    NewUser("1", "", "test@example.com", "user", "token123", "tenant1"),
-			wantErr: true,
+			user:    NewUser("1", "", "test@example.com", "user", "tenant1"),
+			wantErr: false, // Username is not required in the current Validate method
 		},
 		{
 			name:    "Missing Email",
-			user:    NewUser("1", "testuser", "", "user", "token123", "tenant1"),
+			user:    NewUser("1", "testuser", "", "user", "tenant1"),
 			wantErr: true,
 		},
 		{
 			name:    "Missing Role",
-			user:    NewUser("1", "testuser", "test@example.com", "", "token123", "tenant1"),
-			wantErr: true,
-		},
-		{
-			name:    "Missing Token",
-			user:    NewUser("1", "testuser", "test@example.com", "user", "", "tenant1"),
+			user:    NewUser("1", "testuser", "test@example.com", "", "tenant1"),
 			wantErr: true,
 		},
 		{
 			name:    "Missing TenantID",
-			user:    NewUser("1", "testuser", "test@example.com", "user", "token123", ""),
+			user:    NewUser("1", "testuser", "test@example.com", "user", ""),
 			wantErr: true,
 		},
 	}

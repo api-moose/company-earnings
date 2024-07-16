@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"firebase.google.com/go/v4/auth"
+	"github.com/api-moose/company-earnings/internal/db/models"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
@@ -32,8 +33,20 @@ func (m *MockFirebaseClient) GetUser(ctx context.Context, uid string) (*auth.Use
 
 func TestAuthService_AuthenticateUser(t *testing.T) {
 	mockClient := new(MockFirebaseClient)
-	validToken := &auth.Token{UID: "valid_user"}
-	userRecord := &auth.UserRecord{UserInfo: &auth.UserInfo{UID: "valid_user", Email: "test@example.com"}}
+	validToken := &auth.Token{
+		UID: "valid_user",
+		Claims: map[string]interface{}{
+			"role":     "admin",
+			"tenantID": "tenant1",
+		},
+	}
+	userRecord := &auth.UserRecord{
+		UserInfo: &auth.UserInfo{
+			UID:         "valid_user",
+			Email:       "test@example.com",
+			DisplayName: "Test User",
+		},
+	}
 
 	mockClient.On("VerifyIDToken", mock.Anything, "valid_token").Return(validToken, nil)
 	mockClient.On("VerifyIDToken", mock.Anything, "invalid_token").Return(nil, errors.New("invalid token"))
@@ -42,20 +55,36 @@ func TestAuthService_AuthenticateUser(t *testing.T) {
 	authService := NewAuthService(mockClient)
 
 	tests := []struct {
-		name        string
-		token       string
-		expectedErr error
-		expectedRec *auth.UserRecord
+		name         string
+		token        string
+		expectedErr  error
+		expectedUser *models.User
 	}{
-		{"Valid token", "valid_token", nil, userRecord},
-		{"Invalid token", "invalid_token", errors.New("invalid token"), nil},
+		{
+			name:  "Valid token",
+			token: "valid_token",
+			expectedUser: &models.User{
+				ID:       "valid_user",
+				Username: "Test User",
+				Email:    "test@example.com",
+				Role:     "admin",
+				TenantID: "tenant1",
+			},
+			expectedErr: nil,
+		},
+		{
+			name:         "Invalid token",
+			token:        "invalid_token",
+			expectedUser: nil,
+			expectedErr:  errors.New("invalid token"),
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			record, err := authService.AuthenticateUser(context.Background(), tt.token)
+			user, err := authService.AuthenticateUser(context.Background(), tt.token)
 			assert.Equal(t, tt.expectedErr, err)
-			assert.Equal(t, tt.expectedRec, record)
+			assert.Equal(t, tt.expectedUser, user)
 		})
 	}
 

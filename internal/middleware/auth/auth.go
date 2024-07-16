@@ -14,7 +14,6 @@ type ContextKey string
 
 const UserContextKey ContextKey = "user"
 
-// Define an interface for the Firebase Auth client
 type FirebaseAuthClient interface {
 	VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error)
 }
@@ -51,7 +50,7 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		token := parts[1]
 		log.Printf("AuthMiddleware: Extracted token: %s", token)
 
-		decodedToken, err := am.client.VerifyIDToken(context.Background(), token)
+		decodedToken, err := am.client.VerifyIDToken(r.Context(), token)
 		if err != nil {
 			log.Printf("AuthMiddleware: Error verifying ID token: %v", err)
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
@@ -59,12 +58,20 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		user := &models.User{
-			ID:    decodedToken.UID,
-			Email: decodedToken.Claims["email"].(string),
-			// Populate other fields from claims as needed
+			ID: decodedToken.UID,
 		}
 
-		log.Printf("AuthMiddleware: User authenticated: ID=%s, Email=%s", user.ID, user.Email)
+		if email, ok := decodedToken.Claims["email"].(string); ok {
+			user.Email = email
+		}
+		if tenantID, ok := decodedToken.Claims["tenantID"].(string); ok {
+			user.TenantID = tenantID
+		}
+		if role, ok := decodedToken.Claims["role"].(string); ok {
+			user.Role = role
+		}
+
+		log.Printf("AuthMiddleware: User authenticated: ID=%s, Email=%s, Role=%s, TenantID=%s", user.ID, user.Email, user.Role, user.TenantID)
 		ctx := context.WithValue(r.Context(), UserContextKey, user)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -75,7 +82,7 @@ func GetUserFromContext(r *http.Request) (*models.User, bool) {
 	if !ok {
 		log.Println("GetUserFromContext: User not found in context")
 	} else {
-		log.Printf("GetUserFromContext: User found in context: ID=%s, Email=%s", user.ID, user.Email)
+		log.Printf("GetUserFromContext: User found in context: ID=%s, Email=%s, Role=%s, TenantID=%s", user.ID, user.Email, user.Role, user.TenantID)
 	}
 	return user, ok
 }

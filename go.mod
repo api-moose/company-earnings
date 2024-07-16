@@ -5,6 +5,7 @@ go 1.22.4
 require (
 	firebase.google.com/go v3.13.0+incompatible
 	firebase.google.com/go/v4 v4.14.1
+	github.com/go-chi/chi/v5 v5.1.0
 	github.com/pocketbase/pocketbase v0.22.17
 	github.com/stretchr/testify v1.9.0
 	google.golang.org/api v0.187.0

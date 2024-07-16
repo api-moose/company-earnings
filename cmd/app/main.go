@@ -3,13 +3,15 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 
 	firebase "firebase.google.com/go/v4"
 	firebaseAuth "firebase.google.com/go/v4/auth"
@@ -21,9 +23,27 @@ import (
 )
 
 const version = "0.1.0"
+const notFoundMessage = "404 page not found"
+
+type FirebaseAuthWrapper struct {
+	client *firebaseAuth.Client
+}
+
+func (f *FirebaseAuthWrapper) VerifyIDToken(ctx context.Context, idToken string) (*firebaseAuth.Token, error) {
+	return f.client.VerifyIDToken(ctx, idToken)
+}
 
 func main() {
-	opt := option.WithCredentialsFile("path/to/serviceAccountKey.json")
+	credentialsFile := os.Getenv("FIREBASE_CREDENTIALS_FILE")
+	if credentialsFile == "" {
+		// Fallback to local directory if environment variable is not set
+		credentialsFile = "serviceAccountKey.json"
+		if _, err := os.Stat(credentialsFile); os.IsNotExist(err) {
+			log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set and local credentials file is not found")
+		}
+	}
+
+	opt := option.WithCredentialsFile(credentialsFile)
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {
 		log.Fatalf("error initializing app: %v", err)
@@ -34,15 +54,22 @@ func main() {
 		log.Fatalf("error getting Auth client: %v", err)
 	}
 
-	router := setupRouter(authClient)
+	wrappedAuthClient := &FirebaseAuthWrapper{client: authClient}
+
+	r := setupRouter(wrappedAuthClient)
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
 
 	server := &http.Server{
-		Addr:    ":8080",
-		Handler: router,
+		Addr:    ":" + port,
+		Handler: r,
 	}
 
 	go func() {
-		log.Println("Starting server on :8080")
+		log.Printf("Starting server on :%s", port)
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Server error: %v", err)
 		}
@@ -65,50 +92,43 @@ func main() {
 	log.Println("Server stopped gracefully")
 }
 
-func setupRouter(authClient *firebaseAuth.Client) http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/", mainHandler)
-	mux.HandleFunc("/health", healthCheckHandler)
-	mux.HandleFunc("/version", versionHandler)
+func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
+	r := chi.NewRouter()
 
-	var handler http.Handler = mux
+	r.Use(middleware.Recoverer)
+	r.Use(middleware.RequestID)
+	r.Use(middleware.RealIP)
+	r.Use(middleware.Logger)
+	r.Use(logging.LoggingMiddleware)
+	r.Use(tenancy.NewTenantMiddleware(authClient).Middleware)
+	r.Use(auth.NewAuthMiddleware(authClient).Middleware)
+	r.Use(access_control.RBACMiddleware)
 
-	handler = recoveryMiddleware(handler)
-	handler = logging.LoggingMiddleware(handler)
-	handler = tenancy.NewTenantMiddleware(authClient).Middleware(handler)
-	handler = auth.NewAuthMiddleware(authClient).Middleware(handler)
-	handler = access_control.RBACMiddleware(handler)
+	r.Get("/", mainHandler)
+	r.Get("/health", healthCheckHandler)
+	r.Get("/version", versionHandler)
 
-	log.Println("Router setup complete. Middleware chain: Recovery -> Logging -> Tenancy -> Auth -> RBAC")
-	return handler
+	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, notFoundMessage, http.StatusNotFound)
+	})
+
+	return r
 }
 
 func mainHandler(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.Error(w, "404 page not found", http.StatusNotFound)
-		return
-	}
-	fmt.Fprintf(w, "Welcome to the Financial Data Platform API")
+	w.Write([]byte("Welcome to the Financial Data Platform API"))
 }
 
 func healthCheckHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "healthy"})
+	response := map[string]string{"status": "healthy"}
+	jsonResponse, _ := json.Marshal(response)
+	w.Write(jsonResponse)
 }
 
 func versionHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"version": version})
-}
-
-func recoveryMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer func() {
-			if err := recover(); err != nil {
-				log.Printf("Panic recovered: %v", err)
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-			}
-		}()
-		next.ServeHTTP(w, r)
-	})
+	response := map[string]string{"version": version}
+	jsonResponse, _ := json.Marshal(response)
+	w.Write(jsonResponse)
 }

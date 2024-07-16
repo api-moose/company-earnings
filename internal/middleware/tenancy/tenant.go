@@ -6,25 +6,22 @@ import (
 	"net/http"
 	"strings"
 
-	"firebase.google.com/go/v4/auth"
+	"github.com/api-moose/company-earnings/internal/middleware/auth"
 )
 
 type contextKey string
 
 const TenantContextKey contextKey = "tenantID"
 
-// Define an interface for the Firebase Auth client
-type FirebaseAuthClient interface {
-	VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error)
-}
-
 type TenantMiddleware struct {
-	client FirebaseAuthClient
+	client auth.FirebaseAuthClient
 }
 
-func NewTenantMiddleware(client FirebaseAuthClient) *TenantMiddleware {
+func NewTenantMiddleware(client auth.FirebaseAuthClient) *TenantMiddleware {
 	return &TenantMiddleware{client: client}
 }
+
+// ... rest of the file remains the same
 
 func (tm *TenantMiddleware) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -52,7 +49,7 @@ func (tm *TenantMiddleware) Middleware(next http.Handler) http.Handler {
 		}
 
 		token := parts[1]
-		decodedToken, err := tm.client.VerifyIDToken(context.Background(), token)
+		decodedToken, err := tm.client.VerifyIDToken(r.Context(), token)
 		if err != nil {
 			log.Printf("TenantMiddleware: Error verifying ID token: %v", err)
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
