@@ -27,11 +27,9 @@ jobs:
         echo "FIREBASE_CREDENTIALS_FILE=$HOME/firebase-credentials.json" >> $GITHUB_ENV
 
     - name: Run tests
-      env:
-        FIREBASE_CREDENTIALS_FILE: ${{ env.FIREBASE_CREDENTIALS_FILE }}
-        # Add any other environment variables your tests might need
-        PORT: "8080"
-      run: go test ./...
+  env:
+    FIREBASE_CREDENTIALS_FILE: ${{ secrets.FIREBASE_CREDENTIALS_FILE }}
+  run: go test ./...
 
     - name: Set up Google Cloud SDK
       uses: google-github-actions/setup-gcloud@v1

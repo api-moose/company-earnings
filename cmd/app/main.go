@@ -34,16 +34,12 @@ func (f *FirebaseAuthWrapper) VerifyIDToken(ctx context.Context, idToken string)
 }
 
 func main() {
-	credentialsFile := os.Getenv("FIREBASE_CREDENTIALS_FILE")
-	if credentialsFile == "" {
-		// Fallback to local directory if environment variable is not set
-		credentialsFile = "serviceAccountKey.json"
-		if _, err := os.Stat(credentialsFile); os.IsNotExist(err) {
-			log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set and local credentials file is not found")
-		}
+	credentialsJSON := os.Getenv("FIREBASE_CREDENTIALS_FILE")
+	if credentialsJSON == "" {
+		log.Fatal("FIREBASE_CREDENTIALS_FILE environment variable is not set")
 	}
 
-	opt := option.WithCredentialsFile(credentialsFile)
+	opt := option.WithCredentialsJSON([]byte(credentialsJSON))
 	app, err := firebase.NewApp(context.Background(), nil, opt)
 	if err != nil {
 		log.Fatalf("error initializing app: %v", err)
