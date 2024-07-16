@@ -47,7 +47,7 @@ jobs:
           --region ${{ env.REGION }} \
           --allow-unauthenticated \
           --service-account github@financial-data-platform-427521.iam.gserviceaccount.com \
-          --set-env-vars FIREBASE_CREDENTIALS='${{ secrets.FIREBASE_CREDENTIALS_FILE }}' \
+          --set-env-vars FIREBASE_CREDENTIALS_FILE='${{ secrets.FIREBASE_CREDENTIALS_FILE }}' \
           --cpu=1 \
           --memory=512Mi \
           --max-instances=5 \
