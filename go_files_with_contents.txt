@@ -234,6 +234,8 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 	firebaseAuth "firebase.google.com/go/v4/auth"
+	"github.com/api-moose/company-earnings/internal/api/v1/company"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 	"github.com/api-moose/company-earnings/internal/middleware/access_control"
 	auth "github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
@@ -348,6 +350,11 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Get("/health", healthCheckHandler)
 	r.Get("/version", versionHandler)
 
+	// Add company search route
+	companyRepo := mongo.NewRepository()
+	companyHandler := company.NewHandler(companyRepo)
+	r.Get("/api/v1/companies", companyHandler.SearchHandler)
+
 	r.NotFound(notFoundHandler)
 
 	return r
@@ -455,6 +462,7 @@ func TestUserValidate(t *testing.T) {
 }
 \n
 File: ./internal/db/mongo/company.go
+// internal/db/mongo/company.go
 package mongo
 
 import (
@@ -541,6 +549,7 @@ func (u *User) Validate() error {
 }
 \n
 File: ./internal/db/mongo/company_test.go
+// internal/db/mongo/company_test.go
 package mongo
 
 import (
@@ -653,11 +662,12 @@ type Company struct {
 }
 \n
 File: ./internal/api/v1/company/company_handler_test.go
-// internal/api/v1/company/handler_test.go
+// internal/api/v1/company/company_handler_test.go
 package company
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -668,11 +678,11 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-type MockCompanyService struct {
+type MockRepository struct {
 	mock.Mock
 }
 
-func (m *MockCompanyService) Search(ctx context.Context, query string, limit int) ([]models.Company, error) {
+func (m *MockRepository) Search(ctx context.Context, query string, limit int) ([]models.Company, error) {
 	args := m.Called(ctx, query, limit)
 	return args.Get(0).([]models.Company), args.Error(1)
 }
@@ -708,18 +718,28 @@ func TestSearchHandler(t *testing.T) {
 			name:           "Empty query",
 			query:          "",
 			mockResult:     nil,
-			mockError:      errors.New("query cannot be empty"),
+			mockError:      nil,
 			expectedStatus: http.StatusBadRequest,
 			expectedBody:   `{"error":"query cannot be empty"}`,
+		},
+		{
+			name:           "Repository error",
+			query:          "Error",
+			mockResult:     nil,
+			mockError:      errors.New("repository error"),
+			expectedStatus: http.StatusInternalServerError,
+			expectedBody:   `{"error":"repository error"}`,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockService := new(MockCompanyService)
-			mockService.On("Search", mock.Anything, tt.query, 10).Return(tt.mockResult, tt.mockError)
+			mockRepo := new(MockRepository)
+			if tt.query != "" {
+				mockRepo.On("Search", mock.Anything, tt.query, 10).Return(tt.mockResult, tt.mockError)
+			}
 
-			handler := NewHandler(mockService)
+			handler := NewHandler(mockRepo)
 
 			req, err := http.NewRequest("GET", "/companies?query="+tt.query, nil)
 			assert.NoError(t, err)
@@ -728,47 +748,66 @@ func TestSearchHandler(t *testing.T) {
 			handler.SearchHandler(rr, req)
 
 			assert.Equal(t, tt.expectedStatus, rr.Code)
-			assert.JSONEq(t, tt.expectedBody, rr.Body.String())
 
-			mockService.AssertExpectations(t)
+			if tt.expectedStatus == http.StatusOK {
+				var response map[string]interface{}
+				err = json.Unmarshal(rr.Body.Bytes(), &response)
+				assert.NoError(t, err)
+				assert.Equal(t, float64(len(tt.mockResult)), response["count"])
+				assert.Equal(t, tt.mockResult[0].Symbol, response["results"].([]interface{})[0].(map[string]interface{})["symbol"])
+			} else {
+				assert.JSONEq(t, tt.expectedBody, rr.Body.String())
+			}
+
+			mockRepo.AssertExpectations(t)
 		})
 	}
 }
 \n
 File: ./internal/api/v1/company/company_handler.go
-// internal/api/v1/company/handler.go
+// internal/api/v1/company/company_handler.go
 package company
 
 import (
-	"encoding/json"
+	"context"
 	"net/http"
 	"strconv"
 
-	"github.com/api-moose/company-earnings/internal/services/company"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
+	"github.com/api-moose/company-earnings/internal/models"
+	"github.com/api-moose/company-earnings/internal/utils/response"
 )
 
 type Handler struct {
-	service company.Service
+	repo mongo.Repository
 }
 
-func NewHandler(service company.Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(repo mongo.Repository) *Handler {
+	return &Handler{repo: repo}
 }
 
 func (h *Handler) SearchHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
+	if query == "" {
+		response.ErrorResponse(w, &response.ErrorMessage{
+			Status:  http.StatusBadRequest,
+			Message: "query cannot be empty",
+		})
+		return
+	}
+
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit == 0 {
 		limit = 10 // Default limit
 	}
 
-	companies, err := h.service.Search(r.Context(), query, limit)
+	companies, err := h.search(r.Context(), query, limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		response.ErrorResponse(w, err)
 		return
 	}
 
-	response := struct {
+	resp := struct {
 		Count   int              `json:"count"`
 		Results []models.Company `json:"results"`
 		NextURL *string          `json:"next_url"`
@@ -778,8 +817,11 @@ func (h *Handler) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		NextURL: nil, // Implement pagination logic if needed
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	response.JSONResponse(w, http.StatusOK, resp)
+}
+
+func (h *Handler) search(ctx context.Context, query string, limit int) ([]models.Company, error) {
+	return h.repo.Search(ctx, query, limit)
 }
 \n
 File: ./internal/services/auth/auth_service_test.go
@@ -936,13 +978,13 @@ func getTenantIDFromClaims(claims map[string]interface{}) string {
 }
 \n
 File: ./internal/services/company/company_service.go
-// internal/services/company/service.go
+// internal/services/company/company_service.go
 package company
 
 import (
 	"context"
-	"errors"
 
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 	"github.com/api-moose/company-earnings/internal/models"
 )
 
@@ -950,34 +992,16 @@ type Service interface {
 	Search(ctx context.Context, query string, limit int) ([]models.Company, error)
 }
 
-type companyService struct{}
+type companyService struct {
+	repo mongo.Repository
+}
 
-func NewService() Service {
-	return &companyService{}
+func NewService(repo mongo.Repository) Service {
+	return &companyService{repo: repo}
 }
 
 func (s *companyService) Search(ctx context.Context, query string, limit int) ([]models.Company, error) {
-	if query == "" {
-		return nil, errors.New("query cannot be empty")
-	}
-
-	// TODO: Implement actual search logic
-	// For now, we'll return a mock result
-	if query == "Apple" {
-		return []models.Company{
-			{
-				Symbol:       "AAPL",
-				CIK:          "0000320193",
-				SecurityName: "Apple Inc.",
-				SecurityType: "Common Stock",
-				Region:       "US",
-				Exchange:     "NASDAQ",
-				Sector:       "Technology",
-			},
-		}, nil
-	}
-
-	return []models.Company{}, nil
+	return s.repo.Search(ctx, query, limit)
 }
 \n
 File: ./internal/services/company/company_service_test.go

@@ -1,36 +1,44 @@
-// internal/api/v1/company/handler.go
 package company
 
 import (
-	"encoding/json"
 	"net/http"
 	"strconv"
 
-	"github.com/api-moose/company-earnings/internal/services/company"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
+	"github.com/api-moose/company-earnings/internal/models"
+	"github.com/api-moose/company-earnings/internal/utils/response"
 )
 
 type Handler struct {
-	service company.Service
+	repo mongo.Repository
 }
 
-func NewHandler(service company.Service) *Handler {
-	return &Handler{service: service}
+func NewHandler(repo mongo.Repository) *Handler {
+	return &Handler{repo: repo}
 }
 
 func (h *Handler) SearchHandler(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("query")
+	if query == "" {
+		response.ErrorResponse(w, &response.ErrorMessage{
+			Status:  http.StatusBadRequest,
+			Message: "query cannot be empty",
+		})
+		return
+	}
+
 	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 	if limit == 0 {
 		limit = 10 // Default limit
 	}
 
-	companies, err := h.service.Search(r.Context(), query, limit)
+	companies, err := h.repo.Search(r.Context(), query, limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		response.ErrorResponse(w, err)
 		return
 	}
 
-	response := struct {
+	resp := struct {
 		Count   int              `json:"count"`
 		Results []models.Company `json:"results"`
 		NextURL *string          `json:"next_url"`
@@ -40,6 +48,5 @@ func (h *Handler) SearchHandler(w http.ResponseWriter, r *http.Request) {
 		NextURL: nil, // Implement pagination logic if needed
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	response.JSONResponse(w, http.StatusOK, resp)
 }

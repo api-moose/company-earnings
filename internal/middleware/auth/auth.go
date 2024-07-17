@@ -6,7 +6,8 @@ import (
 	"net/http"
 	"strings"
 
-	"firebase.google.com/go/v4/auth"
+	firebaseAuth "firebase.google.com/go/v4/auth"
+	authHandler "github.com/api-moose/company-earnings/internal/api/v1/auth"
 	"github.com/api-moose/company-earnings/internal/db/mongo"
 )
 
@@ -15,15 +16,16 @@ type ContextKey string
 const UserContextKey ContextKey = "user"
 
 type FirebaseAuthClient interface {
-	VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error)
+	VerifyIDToken(ctx context.Context, idToken string) (*firebaseAuth.Token, error)
 }
 
 type AuthMiddleware struct {
-	client FirebaseAuthClient
+	client      FirebaseAuthClient
+	authHandler authHandler.AuthenticatorHandler
 }
 
-func NewAuthMiddleware(client FirebaseAuthClient) *AuthMiddleware {
-	return &AuthMiddleware{client: client}
+func NewAuthMiddleware(client FirebaseAuthClient, authHandler authHandler.AuthenticatorHandler) *AuthMiddleware {
+	return &AuthMiddleware{client: client, authHandler: authHandler}
 }
 
 func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
@@ -50,25 +52,18 @@ func (am *AuthMiddleware) Middleware(next http.Handler) http.Handler {
 		token := parts[1]
 		log.Printf("AuthMiddleware: Extracted token: %s", token)
 
-		decodedToken, err := am.client.VerifyIDToken(r.Context(), token)
+		// Use the authHandler to authenticate the user
+		user, err := am.authHandler.AuthenticateUser(r.Context(), token)
 		if err != nil {
-			log.Printf("AuthMiddleware: Error verifying ID token: %v", err)
+			log.Printf("AuthMiddleware: Error authenticating user: %v", err)
 			http.Error(w, "Invalid token", http.StatusUnauthorized)
 			return
 		}
 
-		user := &mongo.User{
-			ID: decodedToken.UID,
-		}
-
-		if email, ok := decodedToken.Claims["email"].(string); ok {
-			user.Email = email
-		}
-		if tenantID, ok := decodedToken.Claims["tenantID"].(string); ok {
-			user.TenantID = tenantID
-		}
-		if role, ok := decodedToken.Claims["role"].(string); ok {
-			user.Role = role
+		if user == nil {
+			log.Println("AuthMiddleware: User is nil after authentication")
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
 
 		log.Printf("AuthMiddleware: User authenticated: ID=%s, Email=%s, Role=%s, TenantID=%s", user.ID, user.Email, user.Role, user.TenantID)

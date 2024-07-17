@@ -2,11 +2,10 @@ package response
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-
-	"github.com/api-moose/company-earnings/internal/errors/httperrors"
 )
 
 func TestJSONResponse(t *testing.T) {
@@ -32,7 +31,7 @@ func TestJSONResponse(t *testing.T) {
 
 func TestErrorResponse(t *testing.T) {
 	w := httptest.NewRecorder()
-	err := httperrors.NewHTTPError(http.StatusBadRequest, "invalid input")
+	err := &ErrorMessage{Status: http.StatusBadRequest, Message: "invalid input"}
 
 	ErrorResponse(w, err)
 
@@ -40,13 +39,42 @@ func TestErrorResponse(t *testing.T) {
 		t.Errorf("Expected status code %d, got %d", http.StatusBadRequest, w.Code)
 	}
 
-	var response map[string]string
+	var response ErrorMessage
 	jsonErr := json.Unmarshal(w.Body.Bytes(), &response)
 	if jsonErr != nil {
 		t.Fatalf("Error unmarshaling response: %v", jsonErr)
 	}
 
-	if response["error"] != "invalid input" {
-		t.Errorf("Expected error 'invalid input', got '%s'", response["error"])
+	if response.Message != "invalid input" {
+		t.Errorf("Expected error 'invalid input', got '%s'", response.Message)
+	}
+
+	if response.Status != http.StatusBadRequest {
+		t.Errorf("Expected status %d, got %d", http.StatusBadRequest, response.Status)
+	}
+}
+
+func TestErrorResponseWithRegularError(t *testing.T) {
+	w := httptest.NewRecorder()
+	err := errors.New("regular error")
+
+	ErrorResponse(w, err)
+
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("Expected status code %d, got %d", http.StatusInternalServerError, w.Code)
+	}
+
+	var response ErrorMessage
+	jsonErr := json.Unmarshal(w.Body.Bytes(), &response)
+	if jsonErr != nil {
+		t.Fatalf("Error unmarshaling response: %v", jsonErr)
+	}
+
+	if response.Message != "regular error" {
+		t.Errorf("Expected error 'regular error', got '%s'", response.Message)
+	}
+
+	if response.Status != http.StatusInternalServerError {
+		t.Errorf("Expected status %d, got %d", http.StatusInternalServerError, response.Status)
 	}
 }

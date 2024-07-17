@@ -16,8 +16,11 @@ import (
 
 	firebase "firebase.google.com/go/v4"
 	firebaseAuth "firebase.google.com/go/v4/auth"
+	"github.com/api-moose/company-earnings/internal/api/v1/auth"
+	"github.com/api-moose/company-earnings/internal/api/v1/company"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 	"github.com/api-moose/company-earnings/internal/middleware/access_control"
-	auth "github.com/api-moose/company-earnings/internal/middleware/auth"
+	authMiddleware "github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
 	"github.com/api-moose/company-earnings/internal/utils/logging"
 	"google.golang.org/api/option"
@@ -32,6 +35,10 @@ type FirebaseAuthWrapper struct {
 
 func (f *FirebaseAuthWrapper) VerifyIDToken(ctx context.Context, idToken string) (*firebaseAuth.Token, error) {
 	return f.client.VerifyIDToken(ctx, idToken)
+}
+
+func (f *FirebaseAuthWrapper) GetUser(ctx context.Context, uid string) (*firebaseAuth.UserRecord, error) {
+	return f.client.GetUser(ctx, uid)
 }
 
 func main() {
@@ -119,8 +126,9 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Use(logging.LoggingMiddleware)
 
 	if authClient != nil {
+		authHandler := auth.NewHandler(authClient)
 		r.Use(tenancy.NewTenantMiddleware(authClient).Middleware)
-		r.Use(auth.NewAuthMiddleware(authClient).Middleware)
+		r.Use(authMiddleware.NewAuthMiddleware(authClient, authHandler).Middleware)
 		r.Use(access_control.RBACMiddleware)
 	} else {
 		log.Println("Warning: Running without authentication middleware")
@@ -129,6 +137,11 @@ func setupRouter(authClient auth.FirebaseAuthClient) *chi.Mux {
 	r.Get("/", mainHandler)
 	r.Get("/health", healthCheckHandler)
 	r.Get("/version", versionHandler)
+
+	// Add company search route
+	companyRepo := mongo.NewRepository()
+	companyHandler := company.NewHandler(companyRepo)
+	r.Get("/api/v1/companies", companyHandler.SearchHandler)
 
 	r.NotFound(notFoundHandler)
 

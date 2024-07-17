@@ -6,30 +6,45 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"firebase.google.com/go/v4/auth"
+	firebaseAuth "firebase.google.com/go/v4/auth"
+	"github.com/api-moose/company-earnings/internal/db/mongo"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 )
 
-type MockFirebaseClient struct {
+type MockFirebaseAuthClient struct {
 	mock.Mock
 }
 
-func (m *MockFirebaseClient) VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error) {
+func (m *MockFirebaseAuthClient) VerifyIDToken(ctx context.Context, idToken string) (*firebaseAuth.Token, error) {
 	args := m.Called(ctx, idToken)
 	if args.Get(0) != nil {
-		return args.Get(0).(*auth.Token), args.Error(1)
+		return args.Get(0).(*firebaseAuth.Token), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+type MockAuthHandler struct {
+	mock.Mock
+}
+
+func (m *MockAuthHandler) AuthenticateUser(ctx context.Context, token string) (*mongo.User, error) {
+	args := m.Called(ctx, token)
+	if args.Get(0) != nil {
+		return args.Get(0).(*mongo.User), args.Error(1)
 	}
 	return nil, args.Error(1)
 }
 
 func TestAuthMiddleware(t *testing.T) {
-	mockClient := new(MockFirebaseClient)
-	validToken := &auth.Token{UID: "valid_user", Claims: map[string]interface{}{"email": "test@example.com"}}
-	mockClient.On("VerifyIDToken", mock.Anything, "valid_token").Return(validToken, nil)
-	mockClient.On("VerifyIDToken", mock.Anything, "invalid_token").Return(nil, assert.AnError)
+	mockAuthHandler := new(MockAuthHandler)
 
-	am := NewAuthMiddleware(mockClient)
+	validUser := &mongo.User{ID: "valid_user", Email: "test@example.com", Role: "user", TenantID: "tenant1"}
+
+	mockAuthHandler.On("AuthenticateUser", mock.Anything, "valid_token").Return(validUser, nil)
+	mockAuthHandler.On("AuthenticateUser", mock.Anything, "invalid_token").Return(nil, assert.AnError)
+
+	am := NewAuthMiddleware(nil, mockAuthHandler)
 
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := GetUserFromContext(r)
@@ -50,15 +65,15 @@ func TestAuthMiddleware(t *testing.T) {
 		expectedStatus int
 	}{
 		{"Valid token", "Bearer valid_token", http.StatusOK},
-		{"Missing token", "", http.StatusUnauthorized},
 		{"Invalid token", "Bearer invalid_token", http.StatusUnauthorized},
+		{"Missing token", "", http.StatusUnauthorized},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest("GET", "/", nil)
 			if tt.token != "" {
-				req.Header.Add("Authorization", tt.token)
+				req.Header.Set("Authorization", tt.token)
 			}
 			w := httptest.NewRecorder()
 
@@ -68,5 +83,5 @@ func TestAuthMiddleware(t *testing.T) {
 		})
 	}
 
-	mockClient.AssertExpectations(t)
+	mockAuthHandler.AssertExpectations(t)
 }

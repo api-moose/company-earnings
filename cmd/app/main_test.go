@@ -18,6 +18,7 @@ import (
 	"github.com/stretchr/testify/mock"
 
 	firebaseAuth "firebase.google.com/go/v4/auth"
+	authHandler "github.com/api-moose/company-earnings/internal/api/v1/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/access_control"
 	auth "github.com/api-moose/company-earnings/internal/middleware/auth"
 	"github.com/api-moose/company-earnings/internal/middleware/tenancy"
@@ -32,6 +33,14 @@ func (m *MockFirebaseAuthClient) VerifyIDToken(ctx context.Context, idToken stri
 	args := m.Called(ctx, idToken)
 	if args.Get(0) != nil {
 		return args.Get(0).(*firebaseAuth.Token), args.Error(1)
+	}
+	return nil, args.Error(1)
+}
+
+func (m *MockFirebaseAuthClient) GetUser(ctx context.Context, uid string) (*firebaseAuth.UserRecord, error) {
+	args := m.Called(ctx, uid)
+	if args.Get(0) != nil {
+		return args.Get(0).(*firebaseAuth.UserRecord), args.Error(1)
 	}
 	return nil, args.Error(1)
 }
@@ -68,11 +77,19 @@ func setupTestRouter() *chi.Mux {
 	}
 	mockAuth.On("VerifyIDToken", mock.Anything, "valid-token").Return(validToken, nil)
 	mockAuth.On("VerifyIDToken", mock.Anything, "invalid-token").Return(nil, fmt.Errorf("invalid token"))
+	mockAuth.On("GetUser", mock.Anything, "valid_user").Return(&firebaseAuth.UserRecord{
+		UserInfo: &firebaseAuth.UserInfo{
+			UID:   "valid_user",
+			Email: "test@example.com",
+		},
+	}, nil)
+
+	authHandlerInstance := authHandler.NewHandler(mockAuth)
 
 	r := chi.NewRouter()
 	r.Use(logging.LoggingMiddleware)
 	r.Use(tenancy.NewTenantMiddleware(mockAuth).Middleware)
-	r.Use(auth.NewAuthMiddleware(mockAuth).Middleware)
+	r.Use(auth.NewAuthMiddleware(mockAuth, authHandlerInstance).Middleware)
 	r.Use(access_control.RBACMiddleware)
 
 	r.Get("/", mainHandler)

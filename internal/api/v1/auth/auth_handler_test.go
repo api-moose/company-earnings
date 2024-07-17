@@ -31,8 +31,10 @@ func (m *MockFirebaseClient) GetUser(ctx context.Context, uid string) (*auth.Use
 	return nil, args.Error(1)
 }
 
-func TestAuthService_AuthenticateUser(t *testing.T) {
+func TestAuthHandler_AuthenticateUser(t *testing.T) {
 	mockClient := new(MockFirebaseClient)
+	handler := NewHandler(mockClient)
+
 	validToken := &auth.Token{
 		UID: "valid_user",
 		Claims: map[string]interface{}{
@@ -52,13 +54,11 @@ func TestAuthService_AuthenticateUser(t *testing.T) {
 	mockClient.On("VerifyIDToken", mock.Anything, "invalid_token").Return(nil, errors.New("invalid token"))
 	mockClient.On("GetUser", mock.Anything, "valid_user").Return(userRecord, nil)
 
-	authService := NewAuthService(mockClient)
-
 	tests := []struct {
 		name         string
 		token        string
-		expectedErr  error
 		expectedUser *mongo.User
+		expectedErr  error
 	}{
 		{
 			name:  "Valid token",
@@ -82,7 +82,7 @@ func TestAuthService_AuthenticateUser(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			user, err := authService.AuthenticateUser(context.Background(), tt.token)
+			user, err := handler.AuthenticateUser(context.Background(), tt.token)
 			assert.Equal(t, tt.expectedErr, err)
 			assert.Equal(t, tt.expectedUser, user)
 		})

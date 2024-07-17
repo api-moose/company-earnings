@@ -1,9 +1,8 @@
-// internal/api/v1/company/handler_test.go
 package company
 
 import (
 	"context"
-	"errors"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -13,11 +12,11 @@ import (
 	"github.com/stretchr/testify/mock"
 )
 
-type MockCompanyService struct {
+type MockRepository struct {
 	mock.Mock
 }
 
-func (m *MockCompanyService) Search(ctx context.Context, query string, limit int) ([]models.Company, error) {
+func (m *MockRepository) Search(ctx context.Context, query string, limit int) ([]models.Company, error) {
 	args := m.Called(ctx, query, limit)
 	return args.Get(0).([]models.Company), args.Error(1)
 }
@@ -29,7 +28,7 @@ func TestSearchHandler(t *testing.T) {
 		mockResult     []models.Company
 		mockError      error
 		expectedStatus int
-		expectedBody   string
+		expectedBody   map[string]interface{}
 	}{
 		{
 			name:  "Valid search",
@@ -47,24 +46,44 @@ func TestSearchHandler(t *testing.T) {
 			},
 			mockError:      nil,
 			expectedStatus: http.StatusOK,
-			expectedBody:   `{"count":1,"results":[{"symbol":"AAPL","cik":"0000320193","securityName":"Apple Inc.","securityType":"Common Stock","region":"US","exchange":"NASDAQ","sector":"Technology"}],"next_url":null}`,
+			expectedBody: map[string]interface{}{
+				"count": float64(1),
+				"results": []interface{}{
+					map[string]interface{}{
+						"symbol":       "AAPL",
+						"cik":          "0000320193",
+						"securityName": "Apple Inc.",
+						"securityType": "Common Stock",
+						"region":       "US",
+						"exchange":     "NASDAQ",
+						"sector":       "Technology",
+					},
+				},
+				"next_url": nil,
+			},
 		},
 		{
 			name:           "Empty query",
 			query:          "",
 			mockResult:     nil,
-			mockError:      errors.New("query cannot be empty"),
+			mockError:      nil,
 			expectedStatus: http.StatusBadRequest,
-			expectedBody:   `{"error":"query cannot be empty"}`,
+			expectedBody: map[string]interface{}{
+				"status": float64(http.StatusBadRequest),
+				"error":  "query cannot be empty",
+			},
 		},
+		// Add more test cases as needed
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mockService := new(MockCompanyService)
-			mockService.On("Search", mock.Anything, tt.query, 10).Return(tt.mockResult, tt.mockError)
+			mockRepo := new(MockRepository)
+			if tt.query != "" {
+				mockRepo.On("Search", mock.Anything, tt.query, 10).Return(tt.mockResult, tt.mockError)
+			}
 
-			handler := NewHandler(mockService)
+			handler := NewHandler(mockRepo)
 
 			req, err := http.NewRequest("GET", "/companies?query="+tt.query, nil)
 			assert.NoError(t, err)
@@ -73,9 +92,14 @@ func TestSearchHandler(t *testing.T) {
 			handler.SearchHandler(rr, req)
 
 			assert.Equal(t, tt.expectedStatus, rr.Code)
-			assert.JSONEq(t, tt.expectedBody, rr.Body.String())
 
-			mockService.AssertExpectations(t)
+			var response map[string]interface{}
+			err = json.Unmarshal(rr.Body.Bytes(), &response)
+			assert.NoError(t, err)
+
+			assert.Equal(t, tt.expectedBody, response)
+
+			mockRepo.AssertExpectations(t)
 		})
 	}
 }

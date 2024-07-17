@@ -3,30 +3,34 @@ package auth
 import (
 	"context"
 
-	"firebase.google.com/go/v4/auth"
+	firebaseAuth "firebase.google.com/go/v4/auth"
 	"github.com/api-moose/company-earnings/internal/db/mongo"
 )
 
 type FirebaseAuthClient interface {
-	VerifyIDToken(ctx context.Context, idToken string) (*auth.Token, error)
-	GetUser(ctx context.Context, uid string) (*auth.UserRecord, error)
+	VerifyIDToken(ctx context.Context, idToken string) (*firebaseAuth.Token, error)
+	GetUser(ctx context.Context, uid string) (*firebaseAuth.UserRecord, error)
 }
 
-type AuthService struct {
+type AuthenticatorHandler interface {
+	AuthenticateUser(ctx context.Context, token string) (*mongo.User, error)
+}
+
+type Handler struct {
 	client FirebaseAuthClient
 }
 
-func NewAuthService(client FirebaseAuthClient) *AuthService {
-	return &AuthService{client: client}
+func NewHandler(client FirebaseAuthClient) *Handler {
+	return &Handler{client: client}
 }
 
-func (s *AuthService) AuthenticateUser(ctx context.Context, token string) (*mongo.User, error) {
-	decodedToken, err := s.client.VerifyIDToken(ctx, token)
+func (h *Handler) AuthenticateUser(ctx context.Context, token string) (*mongo.User, error) {
+	decodedToken, err := h.client.VerifyIDToken(ctx, token)
 	if err != nil {
 		return nil, err
 	}
 
-	firebaseUser, err := s.client.GetUser(ctx, decodedToken.UID)
+	firebaseUser, err := h.client.GetUser(ctx, decodedToken.UID)
 	if err != nil {
 		return nil, err
 	}
